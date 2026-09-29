@@ -49,7 +49,7 @@ class MoneyMovementApiTests {
         var bob = account("HKD");
         deposit(alice, 10_000, "HKD");
 
-        var response = transfer(alice, bob, 2_500, "HKD");
+        var response = transfer(key(), alice, bob, 2_500, "HKD");
 
         assertThat(response.status()).isEqualTo(201);
         assertThat(response.body().get("status").asString()).isEqualTo("COMPLETED");
@@ -60,13 +60,30 @@ class MoneyMovementApiTests {
         assertThat(tx.body().get("entries")).hasSize(2);
     }
 
+    /** A client timed out and retried: same Idempotency-Key, same body. Money must move once. */
+    @Test
+    void retry_with_the_same_key_moves_money_once_and_replays_the_original_response() {
+        var alice = account("USD");
+        var bob = account("USD");
+        deposit(alice, 1_000, "USD");
+        var key = key();
+
+        var first = transfer(key, alice, bob, 300, "USD");
+        var retry = transfer(key, alice, bob, 300, "USD");
+
+        assertThat(retry.status()).isEqualTo(201);
+        assertThat(retry.body()).isEqualTo(first.body());
+        assertThat(balance(alice)).isEqualTo(700);
+        assertThat(balance(bob)).isEqualTo(300);
+    }
+
     @Test
     void insufficient_funds_is_rejected_and_nothing_moves() {
         var alice = account("EUR");
         var bob = account("EUR");
         deposit(alice, 100, "EUR");
 
-        var rejected = transfer(alice, bob, 101, "EUR");
+        var rejected = transfer(key(), alice, bob, 101, "EUR");
 
         assertThat(rejected.status()).isEqualTo(422);
         assertThat(rejected.contentType()).isEqualTo("application/problem+json");
@@ -81,9 +98,9 @@ class MoneyMovementApiTests {
         var hkd = account("HKD");
         deposit(usd, 1_000, "USD");
 
-        assertThat(problemType(transfer(usd, hkd, 100, "USD"))).isEqualTo("urn:duraledger:problem:currency-mismatch");
-        assertThat(problemType(transfer(usd, UUID.randomUUID(), 100, "USD"))).isEqualTo("urn:duraledger:problem:account-not-found");
-        assertThat(problemType(transfer(usd, usd, 100, "USD"))).isEqualTo("urn:duraledger:problem:same-account");
+        assertThat(problemType(transfer(key(), usd, hkd, 100, "USD"))).isEqualTo("urn:duraledger:problem:currency-mismatch");
+        assertThat(problemType(transfer(key(), usd, UUID.randomUUID(), 100, "USD"))).isEqualTo("urn:duraledger:problem:account-not-found");
+        assertThat(problemType(transfer(key(), usd, usd, 100, "USD"))).isEqualTo("urn:duraledger:problem:same-account");
         assertThat(balance(usd)).isEqualTo(1_000);
     }
 
@@ -92,12 +109,12 @@ class MoneyMovementApiTests {
         var clearing = jdbc.sql("SELECT id FROM accounts WHERE kind = 'EXTERNAL_CLEARING' AND currency = 'USD'")
                 .query(UUID.class).single();
 
-        assertThat(transfer(clearing, account("USD"), 100, "USD").status()).isEqualTo(404);
+        assertThat(transfer(key(), clearing, account("USD"), 100, "USD").status()).isEqualTo(404);
     }
 
     @Test
     void invalid_amounts_are_a_bad_request() {
-        assertThat(transfer(account("USD"), account("USD"), -5, "USD").status()).isEqualTo(400);
+        assertThat(transfer(key(), account("USD"), account("USD"), -5, "USD").status()).isEqualTo(400);
     }
 
     /** 20 transfers draining one account at the same instant: only the affordable 10 may succeed. */
@@ -107,7 +124,7 @@ class MoneyMovementApiTests {
         var bob = account("USD");
         deposit(alice, 1_000, "USD");
 
-        var responses = runConcurrently(20, () -> transfer(alice, bob, 100, "USD"));
+        var responses = runConcurrently(20, () -> transfer(key(), alice, bob, 100, "USD"));
 
         var succeeded = responses.stream().filter(r -> r.status() == 201).count();
         assertThat(responses).extracting(Response::status).containsOnly(201, 422);
@@ -121,7 +138,7 @@ class MoneyMovementApiTests {
         var alice = account("GBP");
         var bob = account("GBP");
         deposit(alice, 5_000, "GBP");
-        transfer(alice, bob, 1_234, "GBP");
+        transfer(key(), alice, bob, 1_234, "GBP");
 
         assertThat(jdbc.sql("""
                 SELECT count(*) FROM (
@@ -142,18 +159,22 @@ class MoneyMovementApiTests {
     }
 
     private void deposit(UUID account, long amount, String currency) {
-        var response = call(http.post().uri("/deposits").contentType(MediaType.APPLICATION_JSON)
+        var response = call(http.post().uri("/deposits").header("Idempotency-Key", key()).contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("accountId", account, "amountMinor", amount, "currency", currency)));
         assertThat(response.status()).isEqualTo(201);
     }
 
-    private Response transfer(UUID from, UUID to, long amount, String currency) {
-        return call(http.post().uri("/transfers").contentType(MediaType.APPLICATION_JSON)
+    private Response transfer(String key, UUID from, UUID to, long amount, String currency) {
+        return call(http.post().uri("/transfers").header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("fromAccountId", from, "toAccountId", to, "amountMinor", amount, "currency", currency)));
     }
 
     private long balance(UUID account) {
         return get("/accounts/" + account + "/balance").body().get("balanceMinor").asLong();
+    }
+
+    private static String key() {
+        return UUID.randomUUID().toString();
     }
 
     private static String problemType(Response response) {
