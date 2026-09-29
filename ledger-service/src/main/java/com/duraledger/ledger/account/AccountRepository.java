@@ -39,6 +39,18 @@ public class AccountRepository {
         return db.selectFrom(ACCOUNTS).where(ACCOUNTS.ID.eq(id)).forUpdate().fetchOptional(AccountRepository::toAccount);
     }
 
+    /**
+     * Compare-and-set on the version read earlier. Returns false if someone else changed the account in
+     * between. The UPDATE also takes the row lock, so a concurrent CAS waits for this transaction to
+     * end and then finds the version moved.
+     */
+    public boolean bumpVersion(UUID id, long expectedVersion) {
+        return db.update(ACCOUNTS)
+                .set(ACCOUNTS.VERSION, ACCOUNTS.VERSION.plus(1))
+                .where(ACCOUNTS.ID.eq(id), ACCOUNTS.VERSION.eq(expectedVersion))
+                .execute() == 1;
+    }
+
     public Account systemAccount(String kind, String currency) {
         return db.selectFrom(ACCOUNTS)
                 .where(ACCOUNTS.KIND.eq(kind), ACCOUNTS.CURRENCY.eq(currency))
@@ -54,6 +66,6 @@ public class AccountRepository {
     }
 
     private static Account toAccount(AccountsRecord r) {
-        return new Account(r.getId(), r.getUserId(), r.getCurrency(), r.getKind(), r.getCreatedAt());
+        return new Account(r.getId(), r.getUserId(), r.getCurrency(), r.getKind(), r.getVersion(), r.getCreatedAt());
     }
 }

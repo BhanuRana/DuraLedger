@@ -190,10 +190,14 @@ class MoneyMovementApiTests {
         var responses = runConcurrently(20, () -> transfer(key(), alice, bob, 100, "USD"));
 
         var succeeded = responses.stream().filter(r -> r.status() == 201).count();
-        assertThat(responses).extracting(Response::status).containsOnly(201, 422);
-        assertThat(succeeded).isEqualTo(10);
-        assertThat(balance(alice)).isZero();
-        assertThat(balance(bob)).isEqualTo(1_000);
+        // 409 = optimistic retries exhausted: a refusal, never an overdraft
+        assertThat(responses).extracting(Response::status).allMatch(s -> s == 201 || s == 422 || s == 409);
+        assertThat(balance(alice)).isEqualTo(1_000 - 100 * succeeded).isGreaterThanOrEqualTo(0);
+        assertThat(balance(bob)).isEqualTo(100 * succeeded);
+        if (strictlySerialized()) {
+            // pessimistic: every request eventually gets the lock, so exactly the affordable 10 succeed
+            assertThat(succeeded).isEqualTo(10);
+        }
     }
 
     @Test
@@ -211,6 +215,11 @@ class MoneyMovementApiTests {
     }
 
     // --- helpers -------------------------------------------------------------
+
+    /** Pessimistic locking queues every request, so outcomes are exact; optimistic ones may give up (409). */
+    boolean strictlySerialized() {
+        return true;
+    }
 
     record Response(int status, JsonNode body, String contentType, String replayed) {}
 

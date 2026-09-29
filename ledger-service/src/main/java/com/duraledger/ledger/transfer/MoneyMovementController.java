@@ -13,9 +13,11 @@ import org.springframework.web.bind.annotation.RestController;
 class MoneyMovementController {
 
     private final MoneyMovementService service;
+    private final TransferRetrier transfers;
 
-    MoneyMovementController(MoneyMovementService service) {
+    MoneyMovementController(MoneyMovementService service, TransferRetrier transfers) {
         this.service = service;
+        this.transfers = transfers;
     }
 
     @PostMapping("/deposits")
@@ -27,6 +29,6 @@ class MoneyMovementController {
     @PostMapping("/transfers")
     ResponseEntity<String> transfer(@RequestHeader("Idempotency-Key") @Size(min = 1, max = 255) String idempotencyKey,
                                     @Valid @RequestBody TransferRequest request) {
-        return service.transfer(idempotencyKey, request).toResponseEntity();
+        return transfers.transfer(idempotencyKey, request).toResponseEntity();
     }
 }

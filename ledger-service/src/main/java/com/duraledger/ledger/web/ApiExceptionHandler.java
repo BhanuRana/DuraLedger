@@ -1,5 +1,6 @@
 package com.duraledger.ledger.web;
 
+import com.duraledger.ledger.ledger.OptimisticConflictException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -23,6 +24,15 @@ class ApiExceptionHandler {
     ResponseEntity<ProblemDetail> duplicate(DuplicateKeyException e) {
         var problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "Resource already exists");
         problem.setType(URI.create("urn:duraledger:problem:already-exists"));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
+    }
+
+    /** Optimistic retries exhausted under contention. Safe for the client to retry with the SAME key. */
+    @ExceptionHandler(OptimisticConflictException.class)
+    ResponseEntity<ProblemDetail> conflict(OptimisticConflictException e) {
+        var problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                e.getMessage() + "; retry with the same Idempotency-Key");
+        problem.setType(URI.create("urn:duraledger:problem:concurrent-modification"));
         return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
     }
 }

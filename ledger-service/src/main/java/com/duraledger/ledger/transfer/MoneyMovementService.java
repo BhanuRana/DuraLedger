@@ -6,6 +6,7 @@ import com.duraledger.ledger.idempotency.IdempotencyService;
 import com.duraledger.ledger.idempotency.IdempotencyService.Outcome;
 import com.duraledger.ledger.idempotency.IdempotencyService.Result;
 import com.duraledger.ledger.ledger.LedgerPoster;
+import com.duraledger.ledger.ledger.OptimisticConflictException;
 import com.duraledger.ledger.web.LedgerRejection;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,11 +29,14 @@ class MoneyMovementService {
     private final AccountRepository accounts;
     private final LedgerPoster poster;
     private final IdempotencyService idempotency;
+    private final TransferProperties properties;
 
-    MoneyMovementService(AccountRepository accounts, LedgerPoster poster, IdempotencyService idempotency) {
+    MoneyMovementService(AccountRepository accounts, LedgerPoster poster, IdempotencyService idempotency,
+                         TransferProperties properties) {
         this.accounts = accounts;
         this.poster = poster;
         this.idempotency = idempotency;
+        this.properties = properties;
     }
 
     @Transactional
@@ -41,14 +45,25 @@ class MoneyMovementService {
             if (request.fromAccountId().equals(request.toAccountId())) {
                 throw LedgerRejection.unprocessable("same-account", "Cannot transfer to the same account");
             }
-            // Lock the account being debited before reading its balance: a concurrent transfer from the
-            // same account waits for this transaction to commit, then sees the reduced balance.
-            Account from = accounts.lockForUpdate(request.fromAccountId()).filter(Account::isUserAccount)
+            // PESSIMISTIC: lock the account being debited before reading its balance, so a concurrent
+            // transfer from it waits for this transaction to commit, then sees the reduced balance.
+            // OPTIMISTIC: read without a lock; the version compare-and-set below detects a race.
+            Account from = (properties.locking() == LockingMode.PESSIMISTIC
+                    ? accounts.lockForUpdate(request.fromAccountId())
+                    : accounts.find(request.fromAccountId()))
+                    .filter(Account::isUserAccount)
                     .orElseThrow(() -> LedgerRejection.accountNotFound(request.fromAccountId()));
             Account to = userAccount(request.toAccountId());
             requireCurrency(from, request.currency());
             requireCurrency(to, request.currency());
             requireFunds(from, request.amountMinor());
+
+            // Commit only if nobody debited this account since we read it. Under PESSIMISTIC we hold the
+            // lock, so this always succeeds; it still bumps the version, so both modes stay safe together.
+            // A conflict rolls everything back (the idempotency claim too) and TransferRetrier retries.
+            if (!accounts.bumpVersion(from.id(), from.version())) {
+                throw new OptimisticConflictException(from.id());
+            }
 
             var posted = poster.post(TRANSFER, idempotencyKey, List.of(
                     debit(from.id(), request.currency(), request.amountMinor()),

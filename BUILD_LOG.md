@@ -68,3 +68,11 @@ A test for a client retry (same key, same body) failed first: the retry created 
 How a concurrent duplicate behaves: its `INSERT` hits the winner's uncommitted index entry and waits on Postgres's lock; once the winner commits, the duplicate claims nothing and replays the stored response. So there is no polling loop, and a crash can't leave a key stuck, because the claim rolls back with everything else.
 
 Verified: 20 identical requests released at once produce one transaction and 20 identical 201 bodies; the retry replays with `Idempotent-Replayed: true`; a missing key is a 400. 32 tests.
+
+## 2026-09-30: idempotency hardened, and a second locking strategy
+
+Two follow-ups to the key: a refusal (e.g. insufficient funds) rolled back the key claim, so a retry after funds arrived succeeded (one key, two outcomes); rejections are now stored and replayed like successes. And a key reused for a different body replayed the old response, a 201 for a transfer that never happened; the stored request hash is now compared, and a mismatch is a 422.
+
+Then optimistic locking behind `duraledger.transfer.locking`: `V4__account_version.sql` adds `accounts.version`; the transfer reads the source without a lock and commits only if `UPDATE … SET version = version + 1 WHERE id = ? AND version = ?` hits one row. A conflict rolls back everything (the key claim too), and `TransferRetrier`, outside the transaction, retries with full-jitter backoff; after 16 attempts it gives up with 409 `concurrent-modification`. The version is bumped under both modes, so they're safe side by side. The whole API suite now runs under both.
+
+Mutation check: with the compare-and-set disabled, the optimistic overdraw test drove the account to −300 in 3 of 3 runs.
