@@ -2,6 +2,9 @@ package com.duraledger.ledger.transfer;
 
 import com.duraledger.ledger.account.Account;
 import com.duraledger.ledger.account.AccountRepository;
+import com.duraledger.ledger.idempotency.IdempotencyService;
+import com.duraledger.ledger.idempotency.IdempotencyService.Outcome;
+import com.duraledger.ledger.idempotency.IdempotencyService.Result;
 import com.duraledger.ledger.ledger.LedgerPoster;
 import com.duraledger.ledger.web.LedgerRejection;
 import org.springframework.stereotype.Service;
@@ -15,53 +18,62 @@ import static com.duraledger.ledger.ledger.Leg.debit;
 import static com.duraledger.ledger.ledger.TransactionType.DEPOSIT;
 import static com.duraledger.ledger.ledger.TransactionType.TRANSFER;
 
-/** Each money movement is ONE database transaction: checks and ledger legs commit together or not at all. */
+/**
+ * Each money movement is ONE database transaction: idempotency claim -> lock -> checks -> ledger legs
+ * -> idempotency completion. Either all of it commits or none of it does.
+ */
 @Service
 class MoneyMovementService {
 
     private final AccountRepository accounts;
     private final LedgerPoster poster;
+    private final IdempotencyService idempotency;
 
-    MoneyMovementService(AccountRepository accounts, LedgerPoster poster) {
+    MoneyMovementService(AccountRepository accounts, LedgerPoster poster, IdempotencyService idempotency) {
         this.accounts = accounts;
         this.poster = poster;
+        this.idempotency = idempotency;
     }
 
     @Transactional
-    public TransferResponse transfer(TransferRequest request) {
-        if (request.fromAccountId().equals(request.toAccountId())) {
-            throw LedgerRejection.unprocessable("same-account", "Cannot transfer to the same account");
-        }
-        // Lock the account being debited before reading its balance: a concurrent transfer from the
-        // same account waits for this transaction to commit, then sees the reduced balance.
-        Account from = accounts.lockForUpdate(request.fromAccountId()).filter(Account::isUserAccount)
-                .orElseThrow(() -> LedgerRejection.accountNotFound(request.fromAccountId()));
-        Account to = userAccount(request.toAccountId());
-        requireCurrency(from, request.currency());
-        requireCurrency(to, request.currency());
-        requireFunds(from, request.amountMinor());
+    public Result transfer(String idempotencyKey, TransferRequest request) {
+        return idempotency.execute(idempotencyKey, "POST /transfers", request, () -> {
+            if (request.fromAccountId().equals(request.toAccountId())) {
+                throw LedgerRejection.unprocessable("same-account", "Cannot transfer to the same account");
+            }
+            // Lock the account being debited before reading its balance: a concurrent transfer from the
+            // same account waits for this transaction to commit, then sees the reduced balance.
+            Account from = accounts.lockForUpdate(request.fromAccountId()).filter(Account::isUserAccount)
+                    .orElseThrow(() -> LedgerRejection.accountNotFound(request.fromAccountId()));
+            Account to = userAccount(request.toAccountId());
+            requireCurrency(from, request.currency());
+            requireCurrency(to, request.currency());
+            requireFunds(from, request.amountMinor());
 
-        var posted = poster.post(TRANSFER, List.of(
-                debit(from.id(), request.currency(), request.amountMinor()),
-                credit(to.id(), request.currency(), request.amountMinor())));
+            var posted = poster.post(TRANSFER, idempotencyKey, List.of(
+                    debit(from.id(), request.currency(), request.amountMinor()),
+                    credit(to.id(), request.currency(), request.amountMinor())));
 
-        return new TransferResponse(posted.transactionId(), TRANSFER.name(), "COMPLETED",
-                from.id(), to.id(), request.amountMinor(), request.currency(), posted.createdAt());
+            return new Outcome(201, new TransferResponse(posted.transactionId(), TRANSFER.name(), "COMPLETED",
+                    from.id(), to.id(), request.amountMinor(), request.currency(), posted.createdAt()));
+        });
     }
 
     /** Money entering from outside: debit the currency's EXTERNAL_CLEARING account, credit the user. */
     @Transactional
-    public DepositResponse deposit(DepositRequest request) {
-        Account account = userAccount(request.accountId());
-        requireCurrency(account, request.currency());
-        Account clearing = accounts.systemAccount("EXTERNAL_CLEARING", request.currency());
+    public Result deposit(String idempotencyKey, DepositRequest request) {
+        return idempotency.execute(idempotencyKey, "POST /deposits", request, () -> {
+            Account account = userAccount(request.accountId());
+            requireCurrency(account, request.currency());
+            Account clearing = accounts.systemAccount("EXTERNAL_CLEARING", request.currency());
 
-        var posted = poster.post(DEPOSIT, List.of(
-                debit(clearing.id(), request.currency(), request.amountMinor()),
-                credit(account.id(), request.currency(), request.amountMinor())));
+            var posted = poster.post(DEPOSIT, idempotencyKey, List.of(
+                    debit(clearing.id(), request.currency(), request.amountMinor()),
+                    credit(account.id(), request.currency(), request.amountMinor())));
 
-        return new DepositResponse(posted.transactionId(), DEPOSIT.name(), "COMPLETED",
-                account.id(), request.amountMinor(), request.currency(), posted.createdAt());
+            return new Outcome(201, new DepositResponse(posted.transactionId(), DEPOSIT.name(), "COMPLETED",
+                    account.id(), request.amountMinor(), request.currency(), posted.createdAt()));
+        });
     }
 
     private void requireFunds(Account account, long amountMinor) {

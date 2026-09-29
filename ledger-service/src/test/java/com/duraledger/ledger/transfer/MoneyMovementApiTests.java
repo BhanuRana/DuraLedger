@@ -73,8 +73,36 @@ class MoneyMovementApiTests {
 
         assertThat(retry.status()).isEqualTo(201);
         assertThat(retry.body()).isEqualTo(first.body());
+        assertThat(first.replayed()).isNull();
+        assertThat(retry.replayed()).isEqualTo("true");
         assertThat(balance(alice)).isEqualTo(700);
         assertThat(balance(bob)).isEqualTo(300);
+    }
+
+    @Test
+    void a_money_movement_without_an_idempotency_key_is_a_bad_request() {
+        var response = call(http.post().uri("/transfers").contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("fromAccountId", UUID.randomUUID(), "toAccountId", UUID.randomUUID(),
+                        "amountMinor", 100, "currency", "USD")));
+
+        assertThat(response.status()).isEqualTo(400);
+    }
+
+    /** The double-submit race: N identical requests at the same instant must create exactly one transaction. */
+    @Test
+    void concurrent_duplicates_with_the_same_key_execute_exactly_once() throws Exception {
+        var alice = account("GBP");
+        var bob = account("GBP");
+        deposit(alice, 10_000, "GBP");
+        var key = key();
+
+        var responses = runConcurrently(20, () -> transfer(key, alice, bob, 1_000, "GBP"));
+
+        assertThat(responses).extracting(Response::status).containsOnly(201);
+        assertThat(responses).extracting(Response::body).containsOnly(responses.getFirst().body());
+        assertThat(jdbc.sql("SELECT count(*) FROM transactions WHERE idempotency_key = ?").param(key)
+                .query(Long.class).single()).isEqualTo(1);
+        assertThat(balance(alice)).isEqualTo(9_000);
     }
 
     @Test
@@ -149,7 +177,7 @@ class MoneyMovementApiTests {
 
     // --- helpers -------------------------------------------------------------
 
-    record Response(int status, JsonNode body, String contentType) {}
+    record Response(int status, JsonNode body, String contentType, String replayed) {}
 
     private UUID account(String currency) {
         var response = call(http.post().uri("/accounts").contentType(MediaType.APPLICATION_JSON)
@@ -207,7 +235,8 @@ class MoneyMovementApiTests {
             String body = new String(res.getBody().readAllBytes());
             var type = res.getHeaders().getContentType();
             return new Response(res.getStatusCode().value(), body.isEmpty() ? null : json.readTree(body),
-                    type == null ? null : type.getType() + "/" + type.getSubtype());
+                    type == null ? null : type.getType() + "/" + type.getSubtype(),
+                    res.getHeaders().getFirst("Idempotent-Replayed"));
         });
     }
 }

@@ -1,12 +1,14 @@
 package com.duraledger.ledger.transfer;
 
 import jakarta.validation.Valid;
-import org.springframework.http.HttpStatus;
+import jakarta.validation.constraints.Size;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
+/** Money-moving endpoints. Idempotency-Key is mandatory: a missing header is a 400, by design. */
 @RestController
 class MoneyMovementController {
 
@@ -17,14 +19,14 @@ class MoneyMovementController {
     }
 
     @PostMapping("/deposits")
-    @ResponseStatus(HttpStatus.CREATED)
-    DepositResponse deposit(@Valid @RequestBody DepositRequest request) {
-        return service.deposit(request);
+    ResponseEntity<String> deposit(@RequestHeader("Idempotency-Key") @Size(min = 1, max = 255) String idempotencyKey,
+                                   @Valid @RequestBody DepositRequest request) {
+        return service.deposit(idempotencyKey, request).toResponseEntity();
     }
 
     @PostMapping("/transfers")
-    @ResponseStatus(HttpStatus.CREATED)
-    TransferResponse transfer(@Valid @RequestBody TransferRequest request) {
-        return service.transfer(request);
+    ResponseEntity<String> transfer(@RequestHeader("Idempotency-Key") @Size(min = 1, max = 255) String idempotencyKey,
+                                    @Valid @RequestBody TransferRequest request) {
+        return service.transfer(idempotencyKey, request).toResponseEntity();
     }
 }

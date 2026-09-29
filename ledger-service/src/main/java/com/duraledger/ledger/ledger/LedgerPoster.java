@@ -27,13 +27,14 @@ public class LedgerPoster {
 
     /** Must join the caller's transaction: the legs and whatever checked them commit together. */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Posted post(TransactionType type, List<Leg> legs) {
+    public Posted post(TransactionType type, String idempotencyKey, List<Leg> legs) {
         if (legs.size() < 2) {
             throw new IllegalArgumentException("A posting needs at least two legs, got " + legs.size());
         }
         var tx = db.insertInto(TRANSACTIONS)
                 .set(TRANSACTIONS.TYPE, type.name())
                 .set(TRANSACTIONS.STATUS, "COMPLETED")
+                .set(TRANSACTIONS.IDEMPOTENCY_KEY, idempotencyKey)
                 .returning(TRANSACTIONS.ID, TRANSACTIONS.CREATED_AT)
                 .fetchSingle();
 

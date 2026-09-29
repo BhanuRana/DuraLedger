@@ -60,3 +60,11 @@ A concurrency test released 20 transfers of 100 from a balance of 1,000 at the s
 Note that the zero-sum trigger can't catch this: an overdraft is perfectly balanced double-entry (Alice −1,300, Bob +1,300). "Money is never created" and "a balance never goes negative" are different rules, and the second needs a lock.
 
 Fix: `SELECT … FOR UPDATE` on the account being debited, before reading its balance. A concurrent transfer from the same account now waits for the first to commit and then sees the reduced balance. After the fix: exactly 10 succeed and the balance ends at 0, in 5 of 5 runs.
+
+## 2026-09-30: exactly once per Idempotency-Key
+
+A test for a client retry (same key, same body) failed first: the retry created a second transaction and debited again. `V3__idempotency_keys.sql` adds the keys table and a `UNIQUE` `transactions.idempotency_key`. The key is claimed with `INSERT … ON CONFLICT DO NOTHING` inside the same database transaction as the transfer ([ADR 0003](docs/decisions/0003-idempotency-key-claimed-inside-the-transaction.md)).
+
+How a concurrent duplicate behaves: its `INSERT` hits the winner's uncommitted index entry and waits on Postgres's lock; once the winner commits, the duplicate claims nothing and replays the stored response. So there is no polling loop, and a crash can't leave a key stuck, because the claim rolls back with everything else.
+
+Verified: 20 identical requests released at once produce one transaction and 20 identical 201 bodies; the retry replays with `Idempotent-Replayed: true`; a missing key is a 400. 32 tests.
