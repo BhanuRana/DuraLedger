@@ -120,6 +120,25 @@ class MoneyMovementApiTests {
         assertThat(balance(bob)).isZero();
     }
 
+    /** A refusal is an outcome too: the same key must never flip from "declined" to "done". */
+    @Test
+    void a_rejection_is_replayed_even_after_funds_arrive() {
+        var alice = account("EUR");
+        var bob = account("EUR");
+        deposit(alice, 100, "EUR");
+        var key = key();
+
+        var rejected = transfer(key, alice, bob, 101, "EUR");
+        deposit(alice, 1_000, "EUR");
+        var retry = transfer(key, alice, bob, 101, "EUR");
+
+        assertThat(rejected.status()).isEqualTo(422);
+        assertThat(retry.status()).isEqualTo(422);
+        assertThat(retry.replayed()).isEqualTo("true");
+        assertThat(problemType(retry)).isEqualTo("urn:duraledger:problem:insufficient-funds");
+        assertThat(balance(bob)).isZero();
+    }
+
     @Test
     void currency_mismatch_unknown_and_same_accounts_are_rejected() {
         var usd = account("USD");

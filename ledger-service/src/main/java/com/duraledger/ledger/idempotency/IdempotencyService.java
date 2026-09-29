@@ -1,5 +1,6 @@
 package com.duraledger.ledger.idempotency;
 
+import com.duraledger.ledger.web.LedgerRejection;
 import org.jooq.DSLContext;
 import org.jooq.JSONB;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +17,7 @@ import java.util.function.Supplier;
 
 import static com.duraledger.ledger.jooq.Tables.IDEMPOTENCY_KEYS;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.http.MediaType.APPLICATION_PROBLEM_JSON;
 
 /**
  * Exactly-once execution per Idempotency-Key, enforced by Postgres rather than a check-then-act.
@@ -41,7 +43,11 @@ public class IdempotencyService {
         this.json = json;
     }
 
-    /** @param operation names the endpoint, so the same key can't be replayed against a different one */
+    /**
+     * @param operation names the endpoint, so the same key can't be replayed against a different one
+     * @param action    must throw {@link LedgerRejection}s before writing anything: a rejection is
+     *                  stored and committed like a success, so earlier writes would commit with it
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public Result execute(String key, String operation, Object request, Supplier<Outcome> action) {
         String requestHash = sha256(operation + "\n" + json.writeValueAsString(request));
@@ -56,7 +62,13 @@ public class IdempotencyService {
             return replay(key);
         }
 
-        Outcome outcome = action.get();
+        Outcome outcome;
+        try {
+            outcome = action.get();
+        } catch (LedgerRejection rejection) {
+            // A refusal is an outcome too: store it, so a retry of this key can't turn into a success.
+            outcome = new Outcome(rejection.status().value(), rejection.toBody());
+        }
         String body = json.writeValueAsString(outcome.body());
         db.update(IDEMPOTENCY_KEYS)
                 .set(IDEMPOTENCY_KEYS.PROCESSING_STATUS, "COMPLETED")
@@ -92,7 +104,7 @@ public class IdempotencyService {
     public record Result(int status, String jsonBody, boolean replayed) {
 
         public ResponseEntity<String> toResponseEntity() {
-            var response = ResponseEntity.status(status).contentType(APPLICATION_JSON);
+            var response = ResponseEntity.status(status).contentType(status >= 400 ? APPLICATION_PROBLEM_JSON : APPLICATION_JSON);
             if (replayed) {
                 response.header("Idempotent-Replayed", "true");
             }
