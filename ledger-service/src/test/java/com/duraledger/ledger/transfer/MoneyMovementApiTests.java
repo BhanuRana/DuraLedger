@@ -120,6 +120,22 @@ class MoneyMovementApiTests {
         assertThat(balance(bob)).isZero();
     }
 
+    /** A client bug reusing a key for a different transfer must not get the old transfer's response. */
+    @Test
+    void reusing_a_key_for_a_different_request_is_rejected() {
+        var alice = account("USD");
+        var bob = account("USD");
+        deposit(alice, 1_000, "USD");
+        var key = key();
+        transfer(key, alice, bob, 300, "USD");
+
+        var reused = transfer(key, alice, bob, 999, "USD");
+
+        assertThat(reused.status()).isEqualTo(422);
+        assertThat(problemType(reused)).isEqualTo("urn:duraledger:problem:idempotency-key-reused");
+        assertThat(balance(alice)).isEqualTo(700);
+    }
+
     /** A refusal is an outcome too: the same key must never flip from "declined" to "done". */
     @Test
     void a_rejection_is_replayed_even_after_funds_arrive() {

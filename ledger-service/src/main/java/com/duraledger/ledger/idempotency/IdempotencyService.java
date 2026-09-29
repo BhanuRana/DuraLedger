@@ -59,7 +59,7 @@ public class IdempotencyService {
                 .onConflictDoNothing()
                 .execute();
         if (claimed == 0) {
-            return replay(key);
+            return replay(key, requestHash);
         }
 
         Outcome outcome;
@@ -79,8 +79,14 @@ public class IdempotencyService {
         return new Result(outcome.status(), body, false);
     }
 
-    private Result replay(String key) {
+    private Result replay(String key, String requestHash) {
         var stored = db.selectFrom(IDEMPOTENCY_KEYS).where(IDEMPOTENCY_KEYS.KEY.eq(key)).fetchSingle();
+        if (!stored.getRequestHash().equals(requestHash)) {
+            // Same key, different endpoint or body: a client bug. Replaying would report a transfer
+            // that never happened as a success.
+            throw LedgerRejection.unprocessable("idempotency-key-reused",
+                    "Idempotency-Key was already used with a different request");
+        }
         // Only committed rows are visible here, and the claim commits together with COMPLETED.
         if (!"COMPLETED".equals(stored.getProcessingStatus())) {
             throw new IllegalStateException("Idempotency key " + key + " visible but not completed");
