@@ -33,13 +33,15 @@ class LedgerSchemaSpec extends Specification {
         postgres.stop()
     }
 
-    def "migration seeds one system account per supported currency"() {
+    def "migrations seed one EXTERNAL_CLEARING and one FX_POOL account per supported currency"() {
         expect:
-        sql.rows("SELECT currency FROM accounts WHERE is_system_account ORDER BY currency")*.currency ==
-                ["EUR", "GBP", "HKD", "USD"]
+        sql.rows("SELECT kind, currency FROM accounts WHERE kind <> 'USER' ORDER BY kind, currency")
+                .collect { "${it.kind}:${it.currency}".toString() } == [
+                "EXTERNAL_CLEARING:EUR", "EXTERNAL_CLEARING:GBP", "EXTERNAL_CLEARING:HKD", "EXTERNAL_CLEARING:USD",
+                "FX_POOL:EUR", "FX_POOL:GBP", "FX_POOL:HKD", "FX_POOL:USD"]
     }
 
-    def "a deposit is two legs against the system account, and balance is derived from the entries"() {
+    def "a deposit is two legs against the clearing account, and balance is derived from the entries"() {
         given:
         def alice = userAccount("HKD")
 
@@ -48,7 +50,7 @@ class LedgerSchemaSpec extends Specification {
 
         then:
         balance(alice) == 10_000
-        balance(system("HKD")) == -10_000   // the outside world "owes" what came in
+        balance(system("EXTERNAL_CLEARING", "HKD")) == -10_000   // the outside world "owes" what came in
     }
 
     def "a balanced transfer commits and moves money between accounts"() {
@@ -88,6 +90,31 @@ class LedgerSchemaSpec extends Specification {
         thrown(SQLException)
     }
 
+    def "FX conversion is four legs through the FX pools, zero-sum per currency"() {
+        given:
+        def usd = userAccount("USD")
+        def hkd = userAccount("HKD")
+        deposit(usd, "USD", 10_000)
+
+        when: "convert 100.00 USD -> 780.00 HKD"
+        post("FX_CONVERT", [
+                [usd, "USD", 10_000, "DEBIT"], [system("FX_POOL", "USD"), "USD", 10_000, "CREDIT"],
+                [system("FX_POOL", "HKD"), "HKD", 78_000, "DEBIT"], [hkd, "HKD", 78_000, "CREDIT"]])
+
+        then:
+        balance(usd) == 0
+        balance(hkd) == 78_000
+    }
+
+    def "a naive two-leg conversion is rejected: raw amounts in different currencies never balance"() {
+        when: "debit 100.00 USD, credit 780.00 HKD"
+        post("FX_CONVERT", [[userAccount("USD"), "USD", 10_000, "DEBIT"], [userAccount("HKD"), "HKD", 78_000, "CREDIT"]])
+
+        then:
+        def e = thrown(SQLException)
+        e.message.contains("does not net to zero")
+    }
+
     def "ledger entries are append-only: #operation is rejected"() {
         given:
         deposit(userAccount("HKD"), "HKD", 100)
@@ -111,7 +138,7 @@ class LedgerSchemaSpec extends Specification {
         def hkdAccount = userAccount("HKD")
 
         when: "posting USD legs onto an HKD account"
-        post("TRANSFER", [[hkdAccount, "USD", 100, "CREDIT"], [system("USD"), "USD", 100, "DEBIT"]])
+        post("TRANSFER", [[hkdAccount, "USD", 100, "CREDIT"], [system("EXTERNAL_CLEARING", "USD"), "USD", 100, "DEBIT"]])
 
         then:
         def e = thrown(SQLException)
@@ -140,14 +167,14 @@ class LedgerSchemaSpec extends Specification {
 
     def "a system account never has an owner, and a user account always does"() {
         when:
-        sql.execute("INSERT INTO accounts (currency, is_system_account) VALUES ('JPY', false)")
+        sql.execute("INSERT INTO accounts (currency, kind) VALUES ('JPY', 'USER')")
 
         then:
         def e = thrown(SQLException)
         e.message.contains("accounts_owner_chk")
     }
 
-    def "whole-ledger invariant: every currency sums to zero across all accounts, system accounts included"() {
+    def "whole-ledger invariant: every currency sums to zero across all accounts, clearing and FX pools included"() {
         expect:
         sql.rows("""
             SELECT currency FROM ledger_entries GROUP BY currency
@@ -163,12 +190,12 @@ class LedgerSchemaSpec extends Specification {
                 [UUID.randomUUID(), currency]).id as UUID
     }
 
-    private UUID system(String currency) {
-        sql.firstRow("SELECT id FROM accounts WHERE is_system_account AND currency = ?", [currency]).id as UUID
+    private UUID system(String kind, String currency) {
+        sql.firstRow("SELECT id FROM accounts WHERE kind = ? AND currency = ?", [kind, currency]).id as UUID
     }
 
     private void deposit(UUID account, String currency, long amount) {
-        post("DEPOSIT", [[system(currency), currency, amount, "DEBIT"], [account, currency, amount, "CREDIT"]])
+        post("DEPOSIT", [[system("EXTERNAL_CLEARING", currency), currency, amount, "DEBIT"], [account, currency, amount, "CREDIT"]])
     }
 
     /** Inserts a transaction and its legs in one DB transaction; the zero-sum check fires at commit. */

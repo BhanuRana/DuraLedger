@@ -38,3 +38,9 @@ The zero-sum trigger is deferred because legs are inserted one row at a time: af
 `LedgerSchemaSpec` (Spock) runs the real Flyway migrations on a real Postgres 16 container and attacks each invariant directly in SQL: an unbalanced posting, a one-sided entry, `UPDATE`/`DELETE`/`TRUNCATE` on entries, USD legs on an HKD account, negative amounts, a second wallet in the same currency, an ownerless user account. Postgres refuses every one. 14 cases.
 
 Mutation check: with the zero-sum trigger's `RAISE` removed, 3 specs fail (the unbalanced posting, the one-sided entry, the whole-ledger sum). Restored, all pass. A test that stays green when its protection is removed proves nothing.
+
+## 2026-09-29: FX broke the model before any Java existed
+
+Writing a spec for a currency conversion exposed a design bug. The obvious posting, "debit 100.00 USD, credit 780.00 HKD", has one leg per currency, so neither nets to zero and the trigger rejects it (correctly). The fix is four legs through the house's per-currency FX pools ([ADR 0002](docs/decisions/0002-fx-through-per-currency-pools.md)). A single `is_system_account` flag can't tell the outside world from the house's inventory, so `V2__account_kinds.sql` replaces it with `kind`: `USER`, `EXTERNAL_CLEARING`, `FX_POOL`.
+
+Done as a new migration rather than an edit to V1: it rebuilds the dependent view, constraints and partial indexes around the new column, and seeds the FX pools. Specs: the four-leg conversion commits; the naive two-leg one is rejected. 16 cases.
