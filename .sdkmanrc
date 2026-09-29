@@ -1,0 +1,2 @@
+# Run `sdk env` here to switch to this JDK (or `sdk env install` once).
+java=21.0.5-tem

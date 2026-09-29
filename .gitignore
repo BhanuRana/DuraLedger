@@ -1,0 +1,20 @@
+# Build output
+target/
+build/
+*.class
+*.log
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+
+# Local environment and secrets
+.env
+.env.*
