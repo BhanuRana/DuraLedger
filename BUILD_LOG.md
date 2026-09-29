@@ -76,3 +76,20 @@ Two follow-ups to the key: a refusal (e.g. insufficient funds) rolled back the k
 Then optimistic locking behind `duraledger.transfer.locking`: `V4__account_version.sql` adds `accounts.version`; the transfer reads the source without a lock and commits only if `UPDATE … SET version = version + 1 WHERE id = ? AND version = ?` hits one row. A conflict rolls back everything (the key claim too), and `TransferRetrier`, outside the transaction, retries with full-jitter backoff; after 16 attempts it gives up with 409 `concurrent-modification`. The version is bumped under both modes, so they're safe side by side. The whole API suite now runs under both.
 
 Mutation check: with the compare-and-set disabled, the optimistic overdraw test drove the account to −300 in 3 of 3 runs.
+
+## 2026-09-30: benchmark, pessimistic vs optimistic
+
+`LockingBenchmark` (on demand, not in CI: `./mvnw test -Dtest='*LockingBenchmark'`): 32 clients, 2,000 transfers per scenario after a warmup, real HTTP against Postgres 16. Scenarios: **hot** (every transfer debits one account), **hot-deep** (the same account with 50,000 entries of history), **spread** (each client its own account).
+
+| Mode | Scenario | req/s | p50 | p99 | Gave up (409) | Wasted attempts |
+|---|---|---:|---:|---:|---:|---:|
+| pessimistic | hot | 320 | 97 ms | 152 ms | 0 | 0 |
+| pessimistic | hot-deep | 104 | 304 ms | 367 ms | 0 | 0 |
+| pessimistic | spread | 1,429 | 21 ms | 52 ms | 0 | 0 |
+| optimistic | hot | 242 | 68 ms | 469 ms | 199 (10%) | 12,527 |
+| optimistic | hot-deep | 104 | 234 ms | 787 ms | 334 (17%) | 14,694 |
+| optimistic | spread | 1,561 | 19 ms | 56 ms | 0 | 0 |
+
+Pessimistic stays the default ([ADR 0004](docs/decisions/0004-pessimistic-locking-by-default.md)): on a hot account optimistic wastes about 6 attempts per success and refuses 10–17% of payments.
+
+**The bigger finding is history.** The same hot account with 50,000 past entries drops from 320 to 104 req/s. `EXPLAIN ANALYZE` of the balance query (a `SUM` over the account's entries) on a bare Postgres 16: **0.24 ms at 1k entries, 2.0 ms at 10k, 24 ms at 100k.** Linear in history, and it runs while the row lock is held, so a busy account gets slower every day it's used.
