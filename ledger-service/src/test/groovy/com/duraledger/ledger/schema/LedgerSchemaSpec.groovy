@@ -174,6 +174,24 @@ class LedgerSchemaSpec extends Specification {
         e.message.contains("accounts_owner_chk")
     }
 
+    def "a user account's stored balance can never be negative: Postgres refuses the overdraft"() {
+        when:
+        sql.execute("UPDATE accounts SET balance_minor = balance_minor - 1 WHERE id = ?", [userAccount("USD")])
+
+        then:
+        def e = thrown(SQLException)
+        e.message.contains("accounts_balance_non_negative_chk")
+    }
+
+    def "system accounts never carry a stored balance: they would become hot rows"() {
+        when:
+        sql.execute("UPDATE accounts SET balance_minor = 0 WHERE kind = 'EXTERNAL_CLEARING' AND currency = 'USD'")
+
+        then:
+        def e = thrown(SQLException)
+        e.message.contains("accounts_balance_materialized_chk")
+    }
+
     def "whole-ledger invariant: every currency sums to zero across all accounts, clearing and FX pools included"() {
         expect:
         sql.rows("""

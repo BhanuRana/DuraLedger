@@ -155,6 +155,9 @@ abstract class LockingBenchmark {
                     SELECT id, 'DEBIT' FROM accounts WHERE kind = 'EXTERNAL_CLEARING' AND currency = 'USD'
                     UNION ALL SELECT :account, 'CREDIT') AS leg (account_id, direction)
                 """).param("n", deposits).param("account", account).update();
+        // keep the stored balance (V5) equal to the seeded entries
+        jdbc.sql("UPDATE accounts SET balance_minor = balance_minor + :delta WHERE id = :account")
+                .param("delta", deposits * 1000L).param("account", account).update();
         jdbc.sql("ANALYZE ledger_entries").update();
     }
 

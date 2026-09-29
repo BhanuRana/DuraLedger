@@ -20,6 +20,7 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -103,6 +104,7 @@ class MoneyMovementApiTests {
         assertThat(jdbc.sql("SELECT count(*) FROM transactions WHERE idempotency_key = ?").param(key)
                 .query(Long.class).single()).isEqualTo(1);
         assertThat(balance(alice)).isEqualTo(9_000);
+        assertMaterializedMatchesLedger(alice, bob);
     }
 
     @Test
@@ -194,10 +196,28 @@ class MoneyMovementApiTests {
         assertThat(responses).extracting(Response::status).allMatch(s -> s == 201 || s == 422 || s == 409);
         assertThat(balance(alice)).isEqualTo(1_000 - 100 * succeeded).isGreaterThanOrEqualTo(0);
         assertThat(balance(bob)).isEqualTo(100 * succeeded);
+        assertMaterializedMatchesLedger(alice, bob);
         if (strictlySerialized()) {
             // pessimistic: every request eventually gets the lock, so exactly the affordable 10 succeed
             assertThat(succeeded).isEqualTo(10);
         }
+    }
+
+    /** Transfers in both directions between the same two accounts, all at once. */
+    @Test
+    void opposite_transfers_between_the_same_accounts_do_not_deadlock() throws Exception {
+        var alice = account("HKD");
+        var bob = account("HKD");
+        deposit(alice, 100_000, "HKD");
+        deposit(bob, 100_000, "HKD");
+
+        var responses = runConcurrently(40, () -> ThreadLocalRandom.current().nextBoolean()
+                ? transfer(key(), alice, bob, 10, "HKD")
+                : transfer(key(), bob, alice, 10, "HKD"));
+
+        assertThat(responses).extracting(Response::status).allMatch(s -> s == 201 || s == 409);
+        assertThat(balance(alice) + balance(bob)).isEqualTo(200_000);
+        assertMaterializedMatchesLedger(alice, bob);
     }
 
     @Test
@@ -251,6 +271,16 @@ class MoneyMovementApiTests {
 
     private static String problemType(Response response) {
         return response.body().get("type").asString();
+    }
+
+    /** The stored balance must always equal the SUM over the account's ledger entries. */
+    private void assertMaterializedMatchesLedger(UUID... accounts) {
+        for (var account : accounts) {
+            var derived = jdbc.sql("""
+                    SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN amount_minor ELSE -amount_minor END), 0)
+                    FROM ledger_entries WHERE account_id = ?""").param(account).query(Long.class).single();
+            assertThat(balance(account)).as("materialized balance of %s", account).isEqualTo(derived);
+        }
     }
 
     /** Releases all tasks at once from a start gate, so they genuinely race. */

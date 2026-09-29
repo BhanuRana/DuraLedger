@@ -8,7 +8,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static com.duraledger.ledger.jooq.Tables.ACCOUNTS;
-import static com.duraledger.ledger.jooq.Tables.ACCOUNT_BALANCES;
 
 @Repository
 public class AccountRepository {
@@ -57,15 +56,8 @@ public class AccountRepository {
                 .fetchSingle(AccountRepository::toAccount);
     }
 
-    /** Derived from the ledger (the account_balances view): a SUM over the account's entries. */
-    public long balance(UUID accountId) {
-        return db.select(ACCOUNT_BALANCES.BALANCE_MINOR)
-                .from(ACCOUNT_BALANCES)
-                .where(ACCOUNT_BALANCES.ACCOUNT_ID.eq(accountId))
-                .fetchSingle(ACCOUNT_BALANCES.BALANCE_MINOR);
-    }
-
     private static Account toAccount(AccountsRecord r) {
-        return new Account(r.getId(), r.getUserId(), r.getCurrency(), r.getKind(), r.getVersion(), r.getCreatedAt());
+        return new Account(r.getId(), r.getUserId(), r.getCurrency(), r.getKind(), r.getVersion(), r.getBalanceMinor(),
+                r.getCreatedAt());
     }
 }

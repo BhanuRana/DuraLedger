@@ -40,7 +40,7 @@ class AccountController {
     @GetMapping("/{id}/balance")
     BalanceResponse balance(@PathVariable UUID id) {
         var account = userAccount(id);
-        return new BalanceResponse(account.id(), account.currency(), accounts.balance(account.id()));
+        return new BalanceResponse(account.id(), account.currency(), account.balanceMinor());
     }
 
     // System accounts (clearing, FX pools) are internal: the public API treats them as not found.

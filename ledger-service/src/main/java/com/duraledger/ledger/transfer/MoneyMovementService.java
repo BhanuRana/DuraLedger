@@ -91,8 +91,8 @@ class MoneyMovementService {
         });
     }
 
-    private void requireFunds(Account account, long amountMinor) {
-        long available = accounts.balance(account.id());
+    private static void requireFunds(Account account, long amountMinor) {
+        long available = account.balanceMinor(); // materialized (V5): O(1), not a SUM over history
         if (available < amountMinor) {
             throw LedgerRejection.unprocessable("insufficient-funds",
                     "Account " + account.id() + " has " + available + " " + account.currency()

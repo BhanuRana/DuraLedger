@@ -9,6 +9,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+import static com.duraledger.ledger.jooq.Tables.ACCOUNTS;
 import static com.duraledger.ledger.jooq.Tables.LEDGER_ENTRIES;
 import static com.duraledger.ledger.jooq.Tables.TRANSACTIONS;
 
@@ -46,7 +47,19 @@ public class LedgerPoster {
         }
         insert.execute();
 
+        applyToMaterializedBalances(legs);
         return new Posted(tx.getId(), tx.getCreatedAt());
+    }
+
+    /** Keeps accounts.balance_minor equal to the SUM of the entries, in the same transaction (V5). */
+    private void applyToMaterializedBalances(List<Leg> legs) {
+        for (Leg leg : legs) {
+            long delta = leg.direction() == Direction.CREDIT ? leg.amountMinor() : -leg.amountMinor();
+            db.update(ACCOUNTS)
+                    .set(ACCOUNTS.BALANCE_MINOR, ACCOUNTS.BALANCE_MINOR.plus(delta))
+                    .where(ACCOUNTS.ID.eq(leg.accountId()), ACCOUNTS.KIND.eq("USER")) // system accounts stay NULL
+                    .execute();
+        }
     }
 
     public record Posted(UUID transactionId, OffsetDateTime createdAt) {}
