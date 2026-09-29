@@ -26,3 +26,9 @@ A root `docker-compose.yml` with Postgres 16, shared by every service to come. S
 How that works: the auto-configured `DataSource` asks for a `JdbcConnectionDetails` bean instead of reading properties directly. Docker Compose support supplies one from live container state (mapped port, `POSTGRES_USER`); in tests, `@ServiceConnection` on a Testcontainers bean supplies the same thing from a throwaway container. Two separate mechanisms on purpose: dev containers keep data between runs, test containers start empty every time. Both are pinned to `postgres:16-alpine`.
 
 Verified: `spring-boot:run` → compose container healthy → Flyway connected (PostgreSQL 16.15) → `/actuator/health` shows `db: UP`. `./mvnw verify` green.
+
+## 2026-09-29: the double-entry schema
+
+`V1__ledger_core.sql`: accounts, transactions and ledger entries, with the money rules enforced by PostgreSQL itself ([ADR 0001](docs/decisions/0001-enforce-ledger-invariants-in-postgres.md)). Each transaction's legs must net to zero per currency (a deferred constraint trigger, checked at `COMMIT`); entries are append-only; an entry's currency must match its account's (composite foreign key); amounts are positive integer cents with the sign in `direction`. Balances are a view over the entries, not a stored value.
+
+The zero-sum trigger is deferred because legs are inserted one row at a time: after the first leg, every valid transaction is momentarily unbalanced.
