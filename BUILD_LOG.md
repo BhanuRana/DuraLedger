@@ -18,3 +18,11 @@ Generated `ledger-service` from Spring Initializr (Boot 4.1, Java 21, Maven): We
 **The generated project didn't build.** `Non-resolvable parent POM … spring-boot-starter-parent:4.1.1.RELEASE (absent)`. Initializr's API lists each Boot version under an internal id with a status suffix (`.RELEASE`, `.M2`, `.BUILD-SNAPSHOT`). The web UI strips it before generating; calling `/starter.zip` with the raw id does not. Maven Central's `maven-metadata.xml` confirms the real version is plain `4.1.1`. One-line fix in `pom.xml`.
 
 Verified: `./mvnw verify` passes, including the generated context test, which boots the app against a real Postgres container through Testcontainers.
+
+## 2026-09-29: Postgres for local development
+
+A root `docker-compose.yml` with Postgres 16, shared by every service to come. Spring Boot's Docker Compose support starts it on `./mvnw spring-boot:run` and builds the `DataSource` from the running container, so there is no datasource URL or password in `application.properties`.
+
+How that works: the auto-configured `DataSource` asks for a `JdbcConnectionDetails` bean instead of reading properties directly. Docker Compose support supplies one from live container state (mapped port, `POSTGRES_USER`); in tests, `@ServiceConnection` on a Testcontainers bean supplies the same thing from a throwaway container. Two separate mechanisms on purpose: dev containers keep data between runs, test containers start empty every time. Both are pinned to `postgres:16-alpine`.
+
+Verified: `spring-boot:run` → compose container healthy → Flyway connected (PostgreSQL 16.15) → `/actuator/health` shows `db: UP`. `./mvnw verify` green.
