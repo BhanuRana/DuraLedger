@@ -32,3 +32,9 @@ Verified: `spring-boot:run` → compose container healthy → Flyway connected (
 `V1__ledger_core.sql`: accounts, transactions and ledger entries, with the money rules enforced by PostgreSQL itself ([ADR 0001](docs/decisions/0001-enforce-ledger-invariants-in-postgres.md)). Each transaction's legs must net to zero per currency (a deferred constraint trigger, checked at `COMMIT`); entries are append-only; an entry's currency must match its account's (composite foreign key); amounts are positive integer cents with the sign in `direction`. Balances are a view over the entries, not a stored value.
 
 The zero-sum trigger is deferred because legs are inserted one row at a time: after the first leg, every valid transaction is momentarily unbalanced.
+
+## 2026-09-29: specs that try to break the ledger
+
+`LedgerSchemaSpec` (Spock) runs the real Flyway migrations on a real Postgres 16 container and attacks each invariant directly in SQL: an unbalanced posting, a one-sided entry, `UPDATE`/`DELETE`/`TRUNCATE` on entries, USD legs on an HKD account, negative amounts, a second wallet in the same currency, an ownerless user account. Postgres refuses every one. 14 cases.
+
+Mutation check: with the zero-sum trigger's `RAISE` removed, 3 specs fail (the unbalanced posting, the one-sided entry, the whole-ledger sum). Restored, all pass. A test that stays green when its protection is removed proves nothing.
