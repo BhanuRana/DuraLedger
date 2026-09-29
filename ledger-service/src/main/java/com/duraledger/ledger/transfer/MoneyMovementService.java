@@ -32,7 +32,10 @@ class MoneyMovementService {
         if (request.fromAccountId().equals(request.toAccountId())) {
             throw LedgerRejection.unprocessable("same-account", "Cannot transfer to the same account");
         }
-        Account from = userAccount(request.fromAccountId());
+        // Lock the account being debited before reading its balance: a concurrent transfer from the
+        // same account waits for this transaction to commit, then sees the reduced balance.
+        Account from = accounts.lockForUpdate(request.fromAccountId()).filter(Account::isUserAccount)
+                .orElseThrow(() -> LedgerRejection.accountNotFound(request.fromAccountId()));
         Account to = userAccount(request.toAccountId());
         requireCurrency(from, request.currency());
         requireCurrency(to, request.currency());

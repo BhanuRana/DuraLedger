@@ -50,3 +50,13 @@ Done as a new migration rather than an edit to V1: it rebuilds the dependent vie
 `codegen/jooq-codegen.groovy`, run by gmavenplus in `generate-sources`: start a throwaway Postgres 16 container, run the Flyway migrations, generate jOOQ classes over JDBC. It's skipped when no migration changed (a stamp file), so normal builds don't start a container. The build now needs Docker running.
 
 Two alternatives didn't work. jOOQ's `DDLDatabase` replays migrations on an embedded H2, which can't parse the PL/pgSQL trigger functions; hiding them from the parser meant hiding real schema from codegen. The official `testcontainers-jooq-codegen-maven-plugin` pins a Docker client too old for the Docker 29 engine. About 50 lines of Groovy, pinned to Spring Boot's own managed versions of jOOQ, Flyway and Testcontainers, avoids both problems.
+
+## 2026-09-29: the overdraft race
+
+Accounts, deposits and transfers now work over HTTP, with every refusal as RFC 9457 `problem+json` carrying a stable type (`urn:duraledger:problem:insufficient-funds`, ...).
+
+A concurrency test released 20 transfers of 100 from a balance of 1,000 at the same instant. Only 10 are affordable, yet two of three runs let **13 and 18** through: each request read the balance before any of them had written, so all saw 1,000. The third run passed by luck, which is how a race hides in an ordinary suite.
+
+Note that the zero-sum trigger can't catch this: an overdraft is perfectly balanced double-entry (Alice −1,300, Bob +1,300). "Money is never created" and "a balance never goes negative" are different rules, and the second needs a lock.
+
+Fix: `SELECT … FOR UPDATE` on the account being debited, before reading its balance. A concurrent transfer from the same account now waits for the first to commit and then sees the reduced balance. After the fix: exactly 10 succeed and the balance ends at 0, in 5 of 5 runs.

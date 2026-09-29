@@ -31,6 +31,14 @@ public class AccountRepository {
         return db.selectFrom(ACCOUNTS).where(ACCOUNTS.ID.eq(id)).fetchOptional(AccountRepository::toAccount);
     }
 
+    /**
+     * {@code SELECT ... FOR UPDATE}: the row lock is held until the caller's transaction ends, so a
+     * concurrent debit of the same account waits here and then sees the balance after this one.
+     */
+    public Optional<Account> lockForUpdate(UUID id) {
+        return db.selectFrom(ACCOUNTS).where(ACCOUNTS.ID.eq(id)).forUpdate().fetchOptional(AccountRepository::toAccount);
+    }
+
     public Account systemAccount(String kind, String currency) {
         return db.selectFrom(ACCOUNTS)
                 .where(ACCOUNTS.KIND.eq(kind), ACCOUNTS.CURRENCY.eq(currency))
