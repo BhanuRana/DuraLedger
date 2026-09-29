@@ -57,7 +57,21 @@ class AccountApiTests {
 
     @Test
     void unknown_accounts_are_not_found() {
-        assertThat(get("/accounts/" + UUID.randomUUID()).status()).isEqualTo(404);
+        var response = get("/accounts/" + UUID.randomUUID());
+
+        assertThat(response.status()).isEqualTo(404);
+        assertThat(response.body().get("type").asString()).isEqualTo("urn:duraledger:problem:account-not-found");
+    }
+
+    @Test
+    void a_user_has_at_most_one_wallet_per_currency() {
+        var userId = UUID.randomUUID();
+        create(userId, "USD");
+
+        var second = create(userId, "USD");
+
+        assertThat(second.status()).isEqualTo(409);
+        assertThat(second.body().get("type").asString()).isEqualTo("urn:duraledger:problem:already-exists");
     }
 
     @Test

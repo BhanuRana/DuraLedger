@@ -60,7 +60,11 @@ class MoneyMovementApiTests {
         var bob = account("EUR");
         deposit(alice, 100, "EUR");
 
-        assertThat(transfer(alice, bob, 101, "EUR").status()).isEqualTo(422);
+        var rejected = transfer(alice, bob, 101, "EUR");
+
+        assertThat(rejected.status()).isEqualTo(422);
+        assertThat(rejected.contentType()).isEqualTo("application/problem+json");
+        assertThat(problemType(rejected)).isEqualTo("urn:duraledger:problem:insufficient-funds");
         assertThat(balance(alice)).isEqualTo(100);
         assertThat(balance(bob)).isZero();
     }
@@ -71,9 +75,9 @@ class MoneyMovementApiTests {
         var hkd = account("HKD");
         deposit(usd, 1_000, "USD");
 
-        assertThat(transfer(usd, hkd, 100, "USD").status()).isEqualTo(422);
-        assertThat(transfer(usd, UUID.randomUUID(), 100, "USD").status()).isEqualTo(404);
-        assertThat(transfer(usd, usd, 100, "USD").status()).isEqualTo(422);
+        assertThat(problemType(transfer(usd, hkd, 100, "USD"))).isEqualTo("urn:duraledger:problem:currency-mismatch");
+        assertThat(problemType(transfer(usd, UUID.randomUUID(), 100, "USD"))).isEqualTo("urn:duraledger:problem:account-not-found");
+        assertThat(problemType(transfer(usd, usd, 100, "USD"))).isEqualTo("urn:duraledger:problem:same-account");
         assertThat(balance(usd)).isEqualTo(1_000);
     }
 
@@ -106,7 +110,7 @@ class MoneyMovementApiTests {
 
     // --- helpers -------------------------------------------------------------
 
-    record Response(int status, JsonNode body) {}
+    record Response(int status, JsonNode body, String contentType) {}
 
     private UUID account(String currency) {
         var response = call(http.post().uri("/accounts").contentType(MediaType.APPLICATION_JSON)
@@ -130,6 +134,10 @@ class MoneyMovementApiTests {
         return get("/accounts/" + account + "/balance").body().get("balanceMinor").asLong();
     }
 
+    private static String problemType(Response response) {
+        return response.body().get("type").asString();
+    }
+
     private Response get(String path) {
         return call(http.get().uri(path));
     }
@@ -137,7 +145,9 @@ class MoneyMovementApiTests {
     private Response call(RestClient.RequestHeadersSpec<?> request) {
         return request.exchange((req, res) -> {
             String body = new String(res.getBody().readAllBytes());
-            return new Response(res.getStatusCode().value(), body.isEmpty() ? null : json.readTree(body));
+            var type = res.getHeaders().getContentType();
+            return new Response(res.getStatusCode().value(), body.isEmpty() ? null : json.readTree(body),
+                    type == null ? null : type.getType() + "/" + type.getSubtype());
         });
     }
 }

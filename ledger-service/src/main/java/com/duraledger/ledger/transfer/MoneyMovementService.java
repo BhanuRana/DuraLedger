@@ -3,10 +3,9 @@ package com.duraledger.ledger.transfer;
 import com.duraledger.ledger.account.Account;
 import com.duraledger.ledger.account.AccountRepository;
 import com.duraledger.ledger.ledger.LedgerPoster;
-import org.springframework.http.HttpStatus;
+import com.duraledger.ledger.web.LedgerRejection;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.UUID;
@@ -31,7 +30,7 @@ class MoneyMovementService {
     @Transactional
     public TransferResponse transfer(TransferRequest request) {
         if (request.fromAccountId().equals(request.toAccountId())) {
-            throw unprocessable("Cannot transfer to the same account");
+            throw LedgerRejection.unprocessable("same-account", "Cannot transfer to the same account");
         }
         Account from = userAccount(request.fromAccountId());
         Account to = userAccount(request.toAccountId());
@@ -65,23 +64,21 @@ class MoneyMovementService {
     private void requireFunds(Account account, long amountMinor) {
         long available = accounts.balance(account.id());
         if (available < amountMinor) {
-            throw unprocessable("Account " + account.id() + " has " + available + " " + account.currency()
-                    + " minor units, needs " + amountMinor);
+            throw LedgerRejection.unprocessable("insufficient-funds",
+                    "Account " + account.id() + " has " + available + " " + account.currency()
+                            + " minor units, needs " + amountMinor);
         }
     }
 
     private Account userAccount(UUID id) {
         return accounts.find(id).filter(Account::isUserAccount)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account " + id + " does not exist"));
+                .orElseThrow(() -> LedgerRejection.accountNotFound(id));
     }
 
     private static void requireCurrency(Account account, String currency) {
         if (!account.currency().equals(currency)) {
-            throw unprocessable("Account " + account.id() + " holds " + account.currency() + ", request is in " + currency);
+            throw LedgerRejection.unprocessable("currency-mismatch",
+                    "Account " + account.id() + " holds " + account.currency() + ", request is in " + currency);
         }
-    }
-
-    private static ResponseStatusException unprocessable(String detail) {
-        return new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT, detail);
     }
 }

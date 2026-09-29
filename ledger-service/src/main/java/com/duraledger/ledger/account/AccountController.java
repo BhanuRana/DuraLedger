@@ -1,5 +1,6 @@
 package com.duraledger.ledger.account;
 
+import com.duraledger.ledger.web.LedgerRejection;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -11,7 +12,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -46,7 +46,7 @@ class AccountController {
     // System accounts (clearing, FX pools) are internal: the public API treats them as not found.
     private Account userAccount(UUID id) {
         return accounts.find(id).filter(Account::isUserAccount)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account " + id + " does not exist"));
+                .orElseThrow(() -> LedgerRejection.accountNotFound(id));
     }
 
     record CreateAccountRequest(
