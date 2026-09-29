@@ -107,3 +107,18 @@ Fix, in two parts, because the modes lock differently:
 The order must be *Postgres's* order: Java's `UUID.compareTo` compares signed 64-bit halves, Postgres compares unsigned bytes, and they disagree for about half of all ids. The poster sorts by the canonical string, which matches, so the two modes lock in the same sequence and stay safe side by side.
 
 Verified: 0 deadlocks in 5 of 5 repeated runs. Mutation check: insertion-order locking brings back 30–46 deadlocks per run, 3 of 3.
+
+## 2026-09-30: the benchmark after storing balances
+
+Same benchmark, balances now stored:
+
+| Mode | Scenario | req/s | p50 | p99 | Gave up (409) |
+|---|---|---:|---:|---:|---:|
+| pessimistic | hot | 399 | 79 ms | 100 ms | 0 |
+| pessimistic | hot-deep (50k entries) | **434** | 72 ms | **91 ms** | 0 |
+| pessimistic | spread | 1,567 | 19 ms | 43 ms | 0 |
+| optimistic | hot | 254 | 57 ms | 444 ms | 245 (12%) |
+| optimistic | hot-deep | 242 | 59 ms | 496 ms | 236 (12%) |
+| optimistic | spread | 1,551 | 19 ms | 55 ms | 0 |
+
+The deep-history hot account went from **104 to 434 req/s (4.2×), p99 367 → 91 ms**, and history stopped mattering (hot ≈ hot-deep). Optimistic still refuses about 12% of hot-account payments, so pessimistic stays the default. The remaining per-account ceiling, about 2.5 ms of lock hold per transfer, is round trips plus the commit's WAL flush; the next levers would be one statement per transfer or batching commits.
