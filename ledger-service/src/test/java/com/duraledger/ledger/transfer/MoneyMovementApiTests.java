@@ -13,8 +13,14 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -94,6 +100,22 @@ class MoneyMovementApiTests {
         assertThat(transfer(account("USD"), account("USD"), -5, "USD").status()).isEqualTo(400);
     }
 
+    /** 20 transfers draining one account at the same instant: only the affordable 10 may succeed. */
+    @Test
+    void concurrent_transfers_never_overdraw_the_source_account() throws Exception {
+        var alice = account("USD");
+        var bob = account("USD");
+        deposit(alice, 1_000, "USD");
+
+        var responses = runConcurrently(20, () -> transfer(alice, bob, 100, "USD"));
+
+        var succeeded = responses.stream().filter(r -> r.status() == 201).count();
+        assertThat(responses).extracting(Response::status).containsOnly(201, 422);
+        assertThat(succeeded).isEqualTo(10);
+        assertThat(balance(alice)).isZero();
+        assertThat(balance(bob)).isEqualTo(1_000);
+    }
+
     @Test
     void the_whole_ledger_nets_to_zero_per_currency() {
         var alice = account("GBP");
@@ -136,6 +158,23 @@ class MoneyMovementApiTests {
 
     private static String problemType(Response response) {
         return response.body().get("type").asString();
+    }
+
+    /** Releases all tasks at once from a start gate, so they genuinely race. */
+    private static <T> List<T> runConcurrently(int n, Callable<T> task) throws Exception {
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var gate = new CountDownLatch(1);
+            var futures = IntStream.range(0, n).mapToObj(i -> pool.submit(() -> {
+                gate.await();
+                return task.call();
+            })).toList();
+            gate.countDown();
+            var results = new ArrayList<T>();
+            for (var f : futures) {
+                results.add(f.get());
+            }
+            return results;
+        }
     }
 
     private Response get(String path) {
