@@ -4,8 +4,11 @@ import com.duraledger.ledger.jooq.tables.records.AccountsRecord;
 import org.jooq.DSLContext;
 import org.springframework.stereotype.Repository;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static com.duraledger.ledger.jooq.Tables.ACCOUNTS;
 
@@ -31,23 +34,18 @@ public class AccountRepository {
     }
 
     /**
-     * {@code SELECT ... FOR UPDATE}: the row lock is held until the caller's transaction ends, so a
-     * concurrent debit of the same account waits here and then sees the balance after this one.
+     * {@code SELECT ... FOR UPDATE} on all given accounts, taking the row locks in id order. A consistent
+     * order is what prevents deadlocks: if A->B locked A then B while B->A locked B then A, each would
+     * wait for the other forever. Missing ids are simply absent from the result.
      */
-    public Optional<Account> lockForUpdate(UUID id) {
-        return db.selectFrom(ACCOUNTS).where(ACCOUNTS.ID.eq(id)).forUpdate().fetchOptional(AccountRepository::toAccount);
-    }
-
-    /**
-     * Compare-and-set on the version read earlier. Returns false if someone else changed the account in
-     * between. The UPDATE also takes the row lock, so a concurrent CAS waits for this transaction to
-     * end and then finds the version moved.
-     */
-    public boolean bumpVersion(UUID id, long expectedVersion) {
-        return db.update(ACCOUNTS)
-                .set(ACCOUNTS.VERSION, ACCOUNTS.VERSION.plus(1))
-                .where(ACCOUNTS.ID.eq(id), ACCOUNTS.VERSION.eq(expectedVersion))
-                .execute() == 1;
+    public Map<UUID, Account> lockInIdOrder(UUID... ids) {
+        return db.selectFrom(ACCOUNTS)
+                .where(ACCOUNTS.ID.in(ids))
+                .orderBy(ACCOUNTS.ID)
+                .forUpdate()
+                .fetch(AccountRepository::toAccount)
+                .stream()
+                .collect(Collectors.toMap(Account::id, Function.identity()));
     }
 
     public Account systemAccount(String kind, String currency) {

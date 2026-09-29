@@ -6,7 +6,7 @@ import com.duraledger.ledger.idempotency.IdempotencyService;
 import com.duraledger.ledger.idempotency.IdempotencyService.Outcome;
 import com.duraledger.ledger.idempotency.IdempotencyService.Result;
 import com.duraledger.ledger.ledger.LedgerPoster;
-import com.duraledger.ledger.ledger.OptimisticConflictException;
+import com.duraledger.ledger.ledger.VersionGuard;
 import com.duraledger.ledger.web.LedgerRejection;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,29 +45,31 @@ class MoneyMovementService {
             if (request.fromAccountId().equals(request.toAccountId())) {
                 throw LedgerRejection.unprocessable("same-account", "Cannot transfer to the same account");
             }
-            // PESSIMISTIC: lock the account being debited before reading its balance, so a concurrent
-            // transfer from it waits for this transaction to commit, then sees the reduced balance.
-            // OPTIMISTIC: read without a lock; the version compare-and-set below detects a race.
-            Account from = (properties.locking() == LockingMode.PESSIMISTIC
-                    ? accounts.lockForUpdate(request.fromAccountId())
-                    : accounts.find(request.fromAccountId()))
-                    .filter(Account::isUserAccount)
-                    .orElseThrow(() -> LedgerRejection.accountNotFound(request.fromAccountId()));
-            Account to = userAccount(request.toAccountId());
+            Account from;
+            Account to;
+            if (properties.locking() == LockingMode.PESSIMISTIC) {
+                // Both rows get their balance updated, so lock both up front, in id order, so that
+                // A->B and B->A running together can't deadlock.
+                var locked = accounts.lockInIdOrder(request.fromAccountId(), request.toAccountId());
+                from = userAccount(locked.get(request.fromAccountId()), request.fromAccountId());
+                to = userAccount(locked.get(request.toAccountId()), request.toAccountId());
+            } else {
+                // OPTIMISTIC: read without locks; the version guard on the debit detects a race.
+                from = userAccount(request.fromAccountId());
+                to = userAccount(request.toAccountId());
+            }
             requireCurrency(from, request.currency());
             requireCurrency(to, request.currency());
             requireFunds(from, request.amountMinor());
 
-            // Commit only if nobody debited this account since we read it. Under PESSIMISTIC we hold the
-            // lock, so this always succeeds; it still bumps the version, so both modes stay safe together.
-            // A conflict rolls everything back (the idempotency claim too) and TransferRetrier retries.
-            if (!accounts.bumpVersion(from.id(), from.version())) {
-                throw new OptimisticConflictException(from.id());
-            }
-
+            // The debit is guarded by the version we read. Under OPTIMISTIC a concurrent debit makes the
+            // poster throw OptimisticConflictException (everything rolls back, TransferRetrier retries).
+            // Under PESSIMISTIC we hold the lock, so it can't fail; it just bumps the version, which
+            // keeps both modes safe side by side.
             var posted = poster.post(TRANSFER, idempotencyKey, List.of(
                     debit(from.id(), request.currency(), request.amountMinor()),
-                    credit(to.id(), request.currency(), request.amountMinor())));
+                    credit(to.id(), request.currency(), request.amountMinor())),
+                    new VersionGuard(from.id(), from.version()));
 
             return new Outcome(201, new TransferResponse(posted.transactionId(), TRANSFER.name(), "COMPLETED",
                     from.id(), to.id(), request.amountMinor(), request.currency(), posted.createdAt()));
@@ -101,8 +103,14 @@ class MoneyMovementService {
     }
 
     private Account userAccount(UUID id) {
-        return accounts.find(id).filter(Account::isUserAccount)
-                .orElseThrow(() -> LedgerRejection.accountNotFound(id));
+        return userAccount(accounts.find(id).orElse(null), id);
+    }
+
+    private static Account userAccount(Account account, UUID requestedId) {
+        if (account == null || !account.isUserAccount()) {
+            throw LedgerRejection.accountNotFound(requestedId);
+        }
+        return account;
     }
 
     private static void requireCurrency(Account account, String currency) {

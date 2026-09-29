@@ -93,3 +93,17 @@ Mutation check: with the compare-and-set disabled, the optimistic overdraw test 
 Pessimistic stays the default ([ADR 0004](docs/decisions/0004-pessimistic-locking-by-default.md)): on a hot account optimistic wastes about 6 attempts per success and refuses 10–17% of payments.
 
 **The bigger finding is history.** The same hot account with 50,000 past entries drops from 320 to 104 req/s. `EXPLAIN ANALYZE` of the balance query (a `SUM` over the account's entries) on a bare Postgres 16: **0.24 ms at 1k entries, 2.0 ms at 10k, 24 ms at 100k.** Linear in history, and it runs while the row lock is held, so a busy account gets slower every day it's used.
+
+## 2026-09-30: stored balances, and the deadlock they caused
+
+`V5__materialized_balance.sql` stores `balance_minor` on user accounts, updated by `LedgerPoster` in the same transaction as the entries, with `CHECK (balance_minor >= 0)` as a last line of defence ([ADR 0005](docs/decisions/0005-materialize-account-balances.md)). The funds check now reads one column instead of summing history. System accounts stay `NULL`: every deposit touches its currency's clearing account, so storing its balance would make it one hot row.
+
+**The deadlock.** A transfer now writes both account rows, and a new test moving money both ways between two accounts at once deadlocked: Postgres reported 110 `deadlock detected` across both locking modes. A→B held A and waited for B while B→A held B and waited for A.
+
+Fix, in two parts, because the modes lock differently:
+- **Pessimistic:** lock both accounts up front with one `SELECT … WHERE id IN (…) ORDER BY id FOR UPDATE`.
+- **Optimistic:** there are no up-front locks, so `LedgerPoster` applies the balance updates in id order. The version compare-and-set can't stay a separate statement run first (it would lock the source out of order again), so it's folded into the source's balance `UPDATE`.
+
+The order must be *Postgres's* order: Java's `UUID.compareTo` compares signed 64-bit halves, Postgres compares unsigned bytes, and they disagree for about half of all ids. The poster sorts by the canonical string, which matches, so the two modes lock in the same sequence and stay safe side by side.
+
+Verified: 0 deadlocks in 5 of 5 repeated runs. Mutation check: insertion-order locking brings back 30–46 deadlocks per run, 3 of 3.
