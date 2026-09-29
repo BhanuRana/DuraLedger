@@ -128,17 +128,84 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
-			<!-- compiles src/test/groovy so Spock specs run alongside the JUnit tests -->
+			<!-- gmavenplus does two jobs:
+			     1. generate-sources: codegen/jooq-codegen.groovy builds jOOQ classes from a real,
+			        Flyway-migrated Postgres container (needs Docker; skipped when migrations are unchanged)
+			     2. compiles src/test/groovy so Spock specs run alongside the JUnit tests -->
 			<plugin>
 				<groupId>org.codehaus.gmavenplus</groupId>
 				<artifactId>gmavenplus-plugin</artifactId>
 				<version>${gmavenplus.version}</version>
 				<executions>
 					<execution>
+						<id>jooq-codegen</id>
+						<phase>generate-sources</phase>
+						<goals>
+							<goal>execute</goal>
+						</goals>
+						<configuration>
+							<scripts>
+								<script>${project.basedir}/codegen/jooq-codegen.groovy</script>
+							</scripts>
+						</configuration>
+					</execution>
+					<execution>
+						<id>spock</id>
 						<goals>
 							<goal>addTestSources</goal>
 							<goal>compileTests</goal>
 						</goals>
+					</execution>
+				</executions>
+				<!-- the plugin classpath isn't managed by Boot's BOM, so versions come from Boot's properties -->
+				<dependencies>
+					<dependency>
+						<groupId>org.apache.groovy</groupId>
+						<artifactId>groovy</artifactId>
+						<version>${groovy.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>org.jooq</groupId>
+						<artifactId>jooq-codegen</artifactId>
+						<version>${jooq.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>org.flywaydb</groupId>
+						<artifactId>flyway-database-postgresql</artifactId>
+						<version>${flyway.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>org.postgresql</groupId>
+						<artifactId>postgresql</artifactId>
+						<version>${postgresql.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>org.testcontainers</groupId>
+						<artifactId>testcontainers-postgresql</artifactId>
+						<version>${testcontainers.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>org.slf4j</groupId>
+						<artifactId>slf4j-simple</artifactId>
+						<version>${slf4j.version}</version>
+					</dependency>
+				</dependencies>
+			</plugin>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>build-helper-maven-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>add-jooq-sources</id>
+						<phase>generate-sources</phase>
+						<goals>
+							<goal>add-source</goal>
+						</goals>
+						<configuration>
+							<sources>
+								<source>${project.build.directory}/generated-sources/jooq</source>
+							</sources>
+						</configuration>
 					</execution>
 				</executions>
 			</plugin>

@@ -44,3 +44,9 @@ Mutation check: with the zero-sum trigger's `RAISE` removed, 3 specs fail (the u
 Writing a spec for a currency conversion exposed a design bug. The obvious posting, "debit 100.00 USD, credit 780.00 HKD", has one leg per currency, so neither nets to zero and the trigger rejects it (correctly). The fix is four legs through the house's per-currency FX pools ([ADR 0002](docs/decisions/0002-fx-through-per-currency-pools.md)). A single `is_system_account` flag can't tell the outside world from the house's inventory, so `V2__account_kinds.sql` replaces it with `kind`: `USER`, `EXTERNAL_CLEARING`, `FX_POOL`.
 
 Done as a new migration rather than an edit to V1: it rebuilds the dependent view, constraints and partial indexes around the new column, and seeds the FX pools. Specs: the four-leg conversion commits; the naive two-leg one is rejected. 16 cases.
+
+## 2026-09-29: jOOQ classes from the real schema
+
+`codegen/jooq-codegen.groovy`, run by gmavenplus in `generate-sources`: start a throwaway Postgres 16 container, run the Flyway migrations, generate jOOQ classes over JDBC. It's skipped when no migration changed (a stamp file), so normal builds don't start a container. The build now needs Docker running.
+
+Two alternatives didn't work. jOOQ's `DDLDatabase` replays migrations on an embedded H2, which can't parse the PL/pgSQL trigger functions; hiding them from the parser meant hiding real schema from codegen. The official `testcontainers-jooq-codegen-maven-plugin` pins a Docker client too old for the Docker 29 engine. About 50 lines of Groovy, pinned to Spring Boot's own managed versions of jOOQ, Flyway and Testcontainers, avoids both problems.
