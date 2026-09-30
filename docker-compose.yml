@@ -14,5 +14,11 @@ services:
       interval: 2s
       retries: 30
 
+  # GCP Pub/Sub emulator: ledger events are published here locally (no GCP account needed).
+  pubsub:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=duraledger-local
+    ports: ["8085:8085"]
+
 volumes:
   pgdata:
