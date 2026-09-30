@@ -10,11 +10,15 @@ permissions:
 
 jobs:
   test:
-    name: test ledger-service
+    name: test ${{ matrix.service }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ledger-service, notification-service]
     defaults:
       run:
-        working-directory: ledger-service
+        working-directory: ${{ matrix.service }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -22,11 +26,11 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
-          cache-dependency-path: ledger-service/pom.xml
-      # Tests start real Postgres containers through Testcontainers; the runner has Docker.
+          cache-dependency-path: ${{ matrix.service }}/pom.xml
+      # Tests start real Postgres and Pub/Sub emulator containers through Testcontainers; the runner has Docker.
       - run: ./mvnw -B -ntp verify
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-reports
-          path: ledger-service/target/surefire-reports
+          name: surefire-reports-${{ matrix.service }}
+          path: ${{ matrix.service }}/target/surefire-reports
