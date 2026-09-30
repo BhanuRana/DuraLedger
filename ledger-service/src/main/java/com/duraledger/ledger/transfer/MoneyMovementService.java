@@ -7,6 +7,7 @@ import com.duraledger.ledger.idempotency.IdempotencyService.Outcome;
 import com.duraledger.ledger.idempotency.IdempotencyService.Result;
 import com.duraledger.ledger.ledger.LedgerPoster;
 import com.duraledger.ledger.ledger.VersionGuard;
+import com.duraledger.ledger.outbox.Outbox;
 import com.duraledger.ledger.web.LedgerRejection;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,7 +22,7 @@ import static com.duraledger.ledger.ledger.TransactionType.TRANSFER;
 
 /**
  * Each money movement is ONE database transaction: idempotency claim -> lock -> checks -> ledger legs
- * -> idempotency completion. Either all of it commits or none of it does.
+ * -> outbox event -> idempotency completion. Either all of it commits or none of it does.
  */
 @Service
 class MoneyMovementService {
@@ -30,13 +31,15 @@ class MoneyMovementService {
     private final LedgerPoster poster;
     private final IdempotencyService idempotency;
     private final TransferProperties properties;
+    private final Outbox outbox;
 
     MoneyMovementService(AccountRepository accounts, LedgerPoster poster, IdempotencyService idempotency,
-                         TransferProperties properties) {
+                         TransferProperties properties, Outbox outbox) {
         this.accounts = accounts;
         this.poster = poster;
         this.idempotency = idempotency;
         this.properties = properties;
+        this.outbox = outbox;
     }
 
     @Transactional
@@ -71,8 +74,10 @@ class MoneyMovementService {
                     credit(to.id(), request.currency(), request.amountMinor())),
                     new VersionGuard(from.id(), from.version()));
 
-            return new Outcome(201, new TransferResponse(posted.transactionId(), TRANSFER.name(), "COMPLETED",
-                    from.id(), to.id(), request.amountMinor(), request.currency(), posted.createdAt()));
+            var response = new TransferResponse(posted.transactionId(), TRANSFER.name(), "COMPLETED",
+                    from.id(), to.id(), request.amountMinor(), request.currency(), posted.createdAt());
+            outbox.append("transaction", posted.transactionId(), "TransferCompleted", response);
+            return new Outcome(201, response);
         });
     }
 
@@ -88,8 +93,10 @@ class MoneyMovementService {
                     debit(clearing.id(), request.currency(), request.amountMinor()),
                     credit(account.id(), request.currency(), request.amountMinor())));
 
-            return new Outcome(201, new DepositResponse(posted.transactionId(), DEPOSIT.name(), "COMPLETED",
-                    account.id(), request.amountMinor(), request.currency(), posted.createdAt()));
+            var response = new DepositResponse(posted.transactionId(), DEPOSIT.name(), "COMPLETED",
+                    account.id(), request.amountMinor(), request.currency(), posted.createdAt());
+            outbox.append("transaction", posted.transactionId(), "DepositCompleted", response);
+            return new Outcome(201, response);
         });
     }
 

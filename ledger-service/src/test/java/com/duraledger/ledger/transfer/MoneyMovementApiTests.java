@@ -220,6 +220,27 @@ class MoneyMovementApiTests {
         assertMaterializedMatchesLedger(alice, bob);
     }
 
+    /** The event commits with the money, once, and only if the money moved. */
+    @Test
+    void each_money_movement_writes_exactly_one_outbox_event_and_refusals_write_none() {
+        var alice = account("USD");
+        var bob = account("USD");
+        deposit(alice, 1_000, "USD");
+        var key = key();
+
+        var transfer = transfer(key, alice, bob, 300, "USD");
+        transfer(key, alice, bob, 300, "USD");              // replay: no second event
+        var refused = transfer(key(), alice, bob, 5_000, "USD");
+
+        var txId = UUID.fromString(transfer.body().get("transactionId").asString());
+        assertThat(jdbc.sql("SELECT event_type FROM outbox WHERE aggregate_id = ?").param(txId)
+                .query(String.class).list()).containsExactly("TransferCompleted");
+        assertThat(refused.status()).isEqualTo(422);
+        assertThat(jdbc.sql("""
+                SELECT count(*) FROM outbox WHERE payload->>'fromAccountId' = ? AND payload->>'amountMinor' = '5000'""")
+                .param(alice.toString()).query(Long.class).single()).isZero();
+    }
+
     @Test
     void the_whole_ledger_nets_to_zero_per_currency() {
         var alice = account("GBP");
