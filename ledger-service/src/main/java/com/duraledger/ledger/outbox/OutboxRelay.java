@@ -8,6 +8,7 @@ import org.jooq.DSLContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -43,6 +44,7 @@ public class OutboxRelay {
     private final PubSubTemplate pubsub;
     private final PubSubAdmin admin;
     private final OutboxProperties properties;
+    private volatile boolean running = true;
 
     OutboxRelay(DSLContext db, PubSubTemplate pubsub, PubSubAdmin admin, OutboxProperties properties,
                 MeterRegistry meters) {
@@ -63,9 +65,21 @@ public class OutboxRelay {
         }
     }
 
+    /**
+     * ContextClosedEvent fires before any bean is destroyed. Without it, ticks kept firing after the
+     * Pub/Sub publisher and the connection pool were already shut down.
+     */
+    @EventListener(ContextClosedEvent.class)
+    void stop() {
+        running = false;
+    }
+
     @Scheduled(fixedDelayString = "${duraledger.outbox.poll-interval:200ms}")
     @Transactional
     public int publishPending() {
+        if (!running) {
+            return 0;
+        }
         var batch = db.selectFrom(OUTBOX)
                 .where(OUTBOX.PUBLISHED_AT.isNull())
                 .orderBy(OUTBOX.ID)

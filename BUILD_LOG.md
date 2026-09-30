@@ -122,3 +122,11 @@ Same benchmark, balances now stored:
 | optimistic | spread | 1,551 | 19 ms | 55 ms | 0 |
 
 The deep-history hot account went from **104 to 434 req/s (4.2×), p99 367 → 91 ms**, and history stopped mattering (hot ≈ hot-deep). Optimistic still refuses about 12% of hot-account payments, so pessimistic stays the default. The remaining per-account ceiling, about 2.5 ms of lock hold per transfer, is round trips plus the commit's WAL flush; the next levers would be one statement per transfer or batching commits.
+
+## 2026-09-30: events leave through a transactional outbox
+
+The dual-write problem: "commit, then publish to the broker" is two steps, and a crash between them loses the event. So each deposit and transfer writes its event to an `outbox` table (`V6__outbox.sql`) **in the same transaction** as its ledger legs: the event commits with the money or not at all, and a refused or replayed request writes none.
+
+`OutboxRelay` publishes committed rows to Pub/Sub every 200 ms and marks them published only after Pub/Sub acknowledges. Delivery is therefore at-least-once (a crash between the ack and the commit re-publishes), and consumers must deduplicate on the `eventId` attribute. `FOR UPDATE SKIP LOCKED` lets several replicas relay at once, each taking a batch nobody else holds. Gauges `duraledger.outbox.pending` and `…oldest.pending.seconds` show relay lag. Locally the Pub/Sub emulator runs in docker-compose; tests start their own emulator container.
+
+**Green suite, noisy shutdown.** The log showed 114 `Unexpected error occurred in scheduled task`: 109 × `Cannot publish on a shut-down publisher` and 4 × `Could not open JDBC Connection`. When a context shuts down, the scheduler kept ticking after the Pub/Sub publisher and the connection pool were closed. Fix: a `running` flag cleared on `ContextClosedEvent` (which fires before any bean is destroyed), plus `spring.task.scheduling.shutdown.await-termination` so an in-flight tick finishes. After: 0.
