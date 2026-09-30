@@ -3,6 +3,7 @@ package com.duraledger.ledger.outbox;
 import com.duraledger.ledger.jooq.tables.records.OutboxRecord;
 import com.google.cloud.spring.pubsub.PubSubAdmin;
 import com.google.cloud.spring.pubsub.core.PubSubTemplate;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.jooq.DSLContext;
 import org.slf4j.Logger;
@@ -46,12 +47,14 @@ public class OutboxRelay {
     private final PubSubAdmin admin;
     private final OutboxProperties properties;
     private final TransactionTemplate tx;
+    private final Counter publishFailures;
     private volatile boolean running = true;
 
     OutboxRelay(DSLContext db, PubSubTemplate pubsub, PubSubAdmin admin, OutboxProperties properties,
                 PlatformTransactionManager transactionManager, MeterRegistry meters) {
         this.db = db;
         this.tx = new TransactionTemplate(transactionManager);
+        this.publishFailures = meters.counter("duraledger.outbox.publish.failures");
         this.pubsub = pubsub;
         this.admin = admin;
         this.properties = properties;
@@ -87,7 +90,15 @@ public class OutboxRelay {
         if (!running) {
             return 0;
         }
-        return tx.execute(status -> publishBatch());
+        try {
+            return tx.execute(status -> publishBatch());
+        } catch (RuntimeException e) {
+            // Expected during a Pub/Sub outage: rows stay unpublished and the next tick retries. One WARN
+            // line and a counter to alert on, instead of an ERROR stack trace 5 times a second.
+            publishFailures.increment();
+            log.warn("Outbox publish failed, will retry: {}", e.toString());
+            return 0;
+        }
     }
 
     private int publishBatch() {
