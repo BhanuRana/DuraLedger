@@ -12,7 +12,8 @@ import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.OffsetDateTime;
 import java.util.Map;
@@ -44,11 +45,13 @@ public class OutboxRelay {
     private final PubSubTemplate pubsub;
     private final PubSubAdmin admin;
     private final OutboxProperties properties;
+    private final TransactionTemplate tx;
     private volatile boolean running = true;
 
     OutboxRelay(DSLContext db, PubSubTemplate pubsub, PubSubAdmin admin, OutboxProperties properties,
-                MeterRegistry meters) {
+                PlatformTransactionManager transactionManager, MeterRegistry meters) {
         this.db = db;
+        this.tx = new TransactionTemplate(transactionManager);
         this.pubsub = pubsub;
         this.admin = admin;
         this.properties = properties;
@@ -74,12 +77,20 @@ public class OutboxRelay {
         running = false;
     }
 
+    /**
+     * The running check must sit OUTSIDE the transaction: with @Transactional on this method, Spring's
+     * proxy borrows a connection before the body runs, so a tick during shutdown failed on the closed
+     * pool before it could see the flag. Hence a TransactionTemplate instead of the annotation.
+     */
     @Scheduled(fixedDelayString = "${duraledger.outbox.poll-interval:200ms}")
-    @Transactional
     public int publishPending() {
         if (!running) {
             return 0;
         }
+        return tx.execute(status -> publishBatch());
+    }
+
+    private int publishBatch() {
         var batch = db.selectFrom(OUTBOX)
                 .where(OUTBOX.PUBLISHED_AT.isNull())
                 .orderBy(OUTBOX.ID)
