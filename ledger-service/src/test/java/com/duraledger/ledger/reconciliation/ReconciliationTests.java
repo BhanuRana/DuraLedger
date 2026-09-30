@@ -57,6 +57,16 @@ class ReconciliationTests {
         assertThat(violations("materialized_balance")).isZero();
     }
 
+    @Test
+    void the_actuator_endpoint_runs_a_reconciliation_on_demand() {
+        var body = json.readTree(http.post().uri("/actuator/reconciliation").retrieve().body(String.class));
+
+        assertThat(body.get("currencyImbalances")).isEmpty();
+        assertThat(body.get("balanceMismatches")).isEmpty();
+        assertThat(body.get("entriesChecked").asLong()).isGreaterThanOrEqualTo(4);
+        assertThat(job.latest()).isNotNull();
+    }
+
     // --- helpers -------------------------------------------------------------
 
     private double violations(String check) {

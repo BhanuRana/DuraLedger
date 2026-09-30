@@ -5,7 +5,8 @@
 #   ./scripts/demo.sh
 #
 # Needs curl, jq and uuidgen. Shows: derived balances, an idempotent retry, key reuse refused, an
-# overdraft refused, a concurrent double-submit executing once, and the events reaching the second service.
+# overdraft refused, a concurrent double-submit executing once, the events reaching the second service,
+# and a live reconciliation of the whole ledger.
 set -euo pipefail
 
 LEDGER=${LEDGER:-http://localhost:8080}
@@ -66,3 +67,7 @@ echo "bob:";   json "$NOTIFY/accounts/$BOB/activity"   | jq -r '.[] | "  \(.dire
 
 step "9. Outbox relay health"
 curl -s "$LEDGER/actuator/prometheus" | grep -E '^duraledger_outbox_(pending|oldest)'
+
+step "10. Reconciliation: the whole ledger nets to zero per currency, and every stored balance matches its entries"
+curl -s -X POST "$LEDGER/actuator/reconciliation" | jq -c '{entriesChecked, currencyImbalances, balanceMismatches, duration}'
+curl -s "$LEDGER/actuator/prometheus" | grep -E '^duraledger_reconciliation_violations'
