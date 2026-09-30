@@ -11,6 +11,7 @@ A multi-currency wallet ledger built with Java 21, Spring Boot, jOOQ, PostgreSQL
 - **Stored balances:** each wallet's balance is kept on the account row, updated in the same transaction as its ledger entries, so reading it is O(1) whatever the history. The ledger entries remain the source of truth.
 - **Events:** each money movement writes its event to an outbox table in the same transaction as its ledger legs, so an event can't be lost and can't announce a change that rolled back. A relay publishes them to Pub/Sub (at-least-once, `FOR UPDATE SKIP LOCKED` so replicas split the work).
 - **Activity feed:** `notification-service` builds each wallet's feed from those events alone, with its own schema. It applies a redelivered event once and skips event types it doesn't know.
+- **Reconciliation:** every 60 seconds, in one consistent snapshot, the ledger checks itself: every currency nets to zero across all entries, and every stored balance equals the sum of its entries. Violations are exported as metrics and logged as errors; `POST /actuator/reconciliation` runs one on demand.
 - **Errors** are RFC 9457 `application/problem+json` with stable types, e.g. `urn:duraledger:problem:insufficient-funds`.
 
 Postgres enforces the ledger invariants itself: zero-sum per currency at commit, append-only entries, an entry's currency matching its account's, and no negative balance.
@@ -55,6 +56,7 @@ Everything runs against a real Postgres and the real Pub/Sub emulator through Te
 | `MoneyMovementApiTests` | Transfers, deposits, idempotency and the concurrency cases over real HTTP: 20 identical requests → 1 transaction; 20 transfers draining one account → exactly the affordable 10 succeed; opposite transfers don't deadlock |
 | `OptimisticMoneyMovementApiTests` | The same suite under optimistic locking |
 | `AccountApiTests` | Wallet creation, lookup and error types |
+| `ReconciliationTests` | Deliberate corruption is caught with exact amounts, including a one-sided entry written with the database triggers disabled |
 | `OutboxRelayTests` | A committed deposit reaches Pub/Sub (the emulator) and is marked published |
 | `ActivityFeedTests` (notification-service) | Both sides of a transfer in the right feeds, a redelivered event applied once, unknown event types skipped, newest first |
 
