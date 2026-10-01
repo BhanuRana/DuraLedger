@@ -4,6 +4,7 @@ import com.duraledger.ledger.TestcontainersConfiguration;
 import com.google.cloud.spring.pubsub.PubSubAdmin;
 import com.google.cloud.spring.pubsub.core.PubSubTemplate;
 import com.google.pubsub.v1.PubsubMessage;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,7 @@ class OutboxRelayTests {
     @Autowired JdbcClient jdbc;
     @Autowired JsonMapper json;
     @Autowired OutboxRelay relay;
+    @Autowired MeterRegistry meters;
 
     RestClient http;
     String subscription;
@@ -101,6 +103,30 @@ class OutboxRelayTests {
         long eventId = Long.parseLong(message.getAttributesMap().get("eventId"));
         await().untilAsserted(() -> assertThat(jdbc.sql("SELECT published_at FROM outbox WHERE id = ?")
                 .param(eventId).query(OffsetDateTime.class).single()).isNotNull());
+    }
+
+    /** The failure counter is what OutboxPublishFailing alerts on, so it must name the right system. */
+    @Test
+    void a_pubsub_failure_is_counted_as_pubsub_and_the_event_still_arrives_once_it_recovers() {
+        var pubsubFailures = meters.counter("duraledger.outbox.publish.failures", "cause", "pubsub");
+        var databaseFailures = meters.counter("duraledger.outbox.publish.failures", "cause", "database");
+        double pubsubBefore = pubsubFailures.count();
+        double databaseBefore = databaseFailures.count();
+
+        admin.deleteTopic(properties.topic());   // Pub/Sub now answers NOT_FOUND
+        String transactionId;
+        try {
+            transactionId = deposit(createAccount(), 700);
+            await().atMost(Duration.ofSeconds(15)).until(() -> pubsubFailures.count() > pubsubBefore);
+            assertThat(databaseFailures.count()).as("database failures").isEqualTo(databaseBefore);
+        } finally {
+            relay.createTopologyIfConfigured();   // even on failure: the other tests need the topic
+        }
+
+        var recovered = "relay-test-" + UUID.randomUUID();
+        admin.createSubscription(recovered, properties.topic());
+        await().atMost(Duration.ofSeconds(15)).until(() -> pubsub.pullAndAck(recovered, 10, true).stream()
+                .anyMatch(m -> transactionId.equals(m.getAttributesMap().get("aggregateId"))));   // stayed in the outbox
     }
 
     // --- helpers -------------------------------------------------------------

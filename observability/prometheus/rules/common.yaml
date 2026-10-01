@@ -109,12 +109,14 @@ groups:
     rules:
       # A publish to Pub/Sub failed. Nothing is lost - the row stays in the outbox and is retried - but
       # the activity feed falls behind until it succeeds. How far behind is the env-specific backlog alert.
+      # cause="pubsub" only: a database outage also fails relay ticks (cause="database"), but that's
+      # HighServerErrorRate's to report; this alert must not send on-call to Pub/Sub for it.
       - alert: OutboxPublishFailing
         expr: |
           (
-            sum by (job) (increase(duraledger_outbox_publish_failures_total[10m]))
+            sum by (job) (increase(duraledger_outbox_publish_failures_total{cause="pubsub"}[10m]))
             +
-            (sum by (job) (min_over_time(duraledger_outbox_publish_failures_total[10m]) unless duraledger_outbox_publish_failures_total offset 10m) or 0 * sum by (job) (duraledger_outbox_publish_failures_total))
+            (sum by (job) (min_over_time(duraledger_outbox_publish_failures_total{cause="pubsub"}[10m]) unless duraledger_outbox_publish_failures_total{cause="pubsub"} offset 10m) or 0 * sum by (job) (duraledger_outbox_publish_failures_total{cause="pubsub"}))
           ) > 0
         labels:
           severity: warning

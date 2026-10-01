@@ -137,10 +137,11 @@ panel("timeseries", "Outbox", [
     ('sum(duraledger_outbox_pending)', "pending rows"),
     ('max(duraledger_outbox_oldest_pending_seconds)', "oldest pending (s)")],
     w=6, x=6)
-panel("timeseries", "Relay failures", [
-    ('sum(rate(duraledger_outbox_publish_failures_total[$__rate_interval]))', "failures")],
+panel("timeseries", "Relay failures by cause", [
+    ('sum by (cause) (rate(duraledger_outbox_publish_failures_total[$__rate_interval]))', "{{cause}}")],
     w=6, x=12, unit="ops",
-    desc="Relay ticks that failed (alert: OutboxPublishFailing). Nothing is lost: rows stay and are retried.")
+    desc="pubsub = Pub/Sub refused or timed out (alert: OutboxPublishFailing). database = the relay could not "
+         "read the outbox (Postgres down; see 5xx share). Either way nothing is lost: rows stay and are retried.")
 panel("timeseries", "Events consumed", [
     ('sum by (result) (rate(duraledger_notifications_events_total[$__rate_interval]))', "{{result}}")],
     w=6, x=18, unit="ops",

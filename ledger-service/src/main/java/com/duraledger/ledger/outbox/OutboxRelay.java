@@ -48,7 +48,8 @@ public class OutboxRelay {
     private final PubSubAdmin admin;
     private final OutboxProperties properties;
     private final TransactionTemplate tx;
-    private final Counter publishFailures;
+    private final Counter pubsubFailures;
+    private final Counter databaseFailures;
     private volatile boolean running = true;
 
     OutboxRelay(DSLContext db, PubSubTemplate pubsub, PubSubAdmin admin, OutboxProperties properties,
@@ -59,7 +60,10 @@ public class OutboxRelay {
         // UPDATEs would only commit as a side effect of Spring resetting autocommit afterwards.
         this.tx = new TransactionTemplate(transactionManager);
         this.tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-        this.publishFailures = meters.counter("duraledger.outbox.publish.failures");
+        // Tagged by cause: a tick also fails when Postgres is down, and an alert saying "Pub/Sub is
+        // failing" during a database outage sends on-call to the wrong system.
+        this.pubsubFailures = meters.counter("duraledger.outbox.publish.failures", "cause", "pubsub");
+        this.databaseFailures = meters.counter("duraledger.outbox.publish.failures", "cause", "database");
         this.pubsub = pubsub;
         this.admin = admin;
         this.properties = properties;
@@ -107,11 +111,16 @@ public class OutboxRelay {
         }
         try {
             return tx.execute(status -> publishBatch());
-        } catch (RuntimeException e) {
+        } catch (PublishFailedException e) {
             // Expected during a Pub/Sub outage: rows stay unpublished and the next tick retries. One WARN
             // line and a counter to alert on, instead of an ERROR stack trace 5 times a second.
-            publishFailures.increment();
+            pubsubFailures.increment();
             log.warn("Outbox publish failed, will retry: {}", e.toString());
+            return 0;
+        } catch (RuntimeException e) {
+            // Couldn't read or mark the outbox (database down): nothing was published, nothing is lost.
+            databaseFailures.increment();
+            log.warn("Outbox relay could not reach the database, will retry: {}", e.toString());
             return 0;
         }
     }
@@ -149,7 +158,7 @@ public class OutboxRelay {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            throw new IllegalStateException("Publishing outbox batch failed; will retry", e);
+            throw new PublishFailedException(e);
         }
 
         db.update(OUTBOX)
@@ -175,5 +184,12 @@ public class OutboxRelay {
     private double oldestPendingAgeSeconds() {
         var oldest = db.select(min(OUTBOX.CREATED_AT)).from(OUTBOX).where(OUTBOX.PUBLISHED_AT.isNull()).fetchSingle().value1();
         return oldest == null ? 0 : java.time.Duration.between(oldest, OffsetDateTime.now()).toMillis() / 1000.0;
+    }
+
+    /** Pub/Sub refused or timed out, as opposed to the database failing around it. */
+    static final class PublishFailedException extends RuntimeException {
+        PublishFailedException(Throwable cause) {
+            super("Publishing outbox batch failed; will retry", cause);
+        }
     }
 }

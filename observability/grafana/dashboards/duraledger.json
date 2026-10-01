@@ -778,7 +778,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Relay failures",
+      "title": "Relay failures by cause",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -796,8 +796,8 @@
             "uid": "${datasource}"
           },
           "refId": "A",
-          "expr": "sum(rate(duraledger_outbox_publish_failures_total[$__rate_interval]))",
-          "legendFormat": "failures"
+          "expr": "sum by (cause) (rate(duraledger_outbox_publish_failures_total[$__rate_interval]))",
+          "legendFormat": "{{cause}}"
         }
       ],
       "fieldConfig": {
@@ -822,7 +822,7 @@
           "sort": "desc"
         }
       },
-      "description": "Relay ticks that failed (alert: OutboxPublishFailing). Nothing is lost: rows stay and are retried."
+      "description": "pubsub = Pub/Sub refused or timed out (alert: OutboxPublishFailing). database = the relay could not read the outbox (Postgres down; see 5xx share). Either way nothing is lost: rows stay and are retried."
     },
     {
       "type": "timeseries",
