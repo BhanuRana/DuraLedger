@@ -35,6 +35,17 @@
 	</properties>
 	<dependencyManagement>
 		<dependencies>
+			<!-- Before the GCP BOM (the first managed version wins). The GCP BOM pins the protobuf runtime
+			     at 4.33.2, but micrometer-registry-otlp's generated classes need at least 4.34.0, and the
+			     app crashed on startup with export on. A newer runtime is fine for older generated code,
+			     so the GCP libraries are unaffected. -->
+			<dependency>
+				<groupId>com.google.protobuf</groupId>
+				<artifactId>protobuf-bom</artifactId>
+				<version>4.34.0</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
 			<dependency>
 				<groupId>com.google.cloud</groupId>
 				<artifactId>spring-cloud-gcp-dependencies</artifactId>
