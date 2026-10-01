@@ -24,6 +24,15 @@ services:
     command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=duraledger-local
     ports: ["8085:8085"]
 
+  # Local stand-in for Grafana Cloud: an OpenTelemetry collector, Prometheus and Grafana in one
+  # container, receiving the same OTLP pushes production sends. Grafana: http://localhost:3000.
+  # Also usable on its own: `docker compose --profile obs up -d`, then run a service with
+  # MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED=true.
+  lgtm:
+    profiles: ["app", "obs"]
+    image: grafana/otel-lgtm:latest
+    ports: ["3000:3000", "4318:4318"]
+
   # --- the services themselves, from their images ------------------------------------------
   # The packaged jar has no Docker Compose support (Spring Boot leaves it out of production jars),
   # so connection details come from environment variables, as they will in any real deployment.
@@ -37,10 +46,13 @@ services:
       SPRING_DATASOURCE_USERNAME: duraledger
       SPRING_DATASOURCE_PASSWORD: local-only-password
       SPRING_CLOUD_GCP_PUBSUB_EMULATOR_HOST: pubsub:8085
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "true"
+      MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://lgtm:4318/v1/metrics
     mem_limit: 768m   # on purpose: the heap is sized from this limit, not from the host's RAM
     depends_on:
       postgres: { condition: service_healthy }
       pubsub: { condition: service_started }
+      lgtm: { condition: service_started }
   notification-service:
     profiles: ["app"]
     build: ./notification-service
@@ -50,6 +62,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       pubsub: { condition: service_started }
+      lgtm: { condition: service_started }
 
 volumes:
   postgres18-data:
