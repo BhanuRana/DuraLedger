@@ -30,8 +30,15 @@ services:
   # MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED=true.
   lgtm:
     profiles: ["app", "obs"]
-    image: grafana/otel-lgtm:latest
-    ports: ["3000:3000", "4318:4318"]
+    # Pinned: observability/prometheus/prometheus.yaml is this image's own config plus our rule files.
+    image: grafana/otel-lgtm:0.33.1
+    # 9090: the Prometheus UI, whose Alerts tab shows DuraLedger's rules (observability/README.md)
+    ports: ["3000:3000", "4318:4318", "9090:9090"]
+    volumes:
+      - ./observability/prometheus/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
+      - ./observability/prometheus/rules:/otel-lgtm/rules:ro
+      - ./observability/grafana/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/duraledger.yaml:ro
+      - ./observability/grafana/dashboards:/otel-lgtm/duraledger-dashboards:ro
 
   # --- the services themselves, from their images ------------------------------------------
   # The packaged jar has no Docker Compose support (Spring Boot leaves it out of production jars),

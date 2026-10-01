@@ -1,0 +1,27 @@
+# Thresholds for local (compose / kind): reconciliation every 60 s, outbox relay every 200 ms.
+# gcp.yaml has the same alerts sized for Cloud Run's sparse Cloud Scheduler calls.
+groups:
+  - name: duraledger-schedules-local
+    rules:
+      # The job itself stopped (scheduler thread died, stuck query). max over instances: any replica's
+      # latest run counts. The gauge starts at 0, so a job that never ran reads as ~56 years stale and
+      # fires too - `for` covers the 30 s initial delay after startup.
+      - alert: ReconciliationStale
+        expr: time() - max by (job) (last_over_time(duraledger_reconciliation_last_run_timestamp_seconds[1h])) > 300
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Reconciliation last ran {{ $value | humanizeDuration }} ago (every 60s expected)"
+          description: The ledger is not being checked. LedgerInvariantViolated cannot fire while this does.
+
+      # Events are committed but not reaching Pub/Sub. The relay polls every 200 ms, so a minute means
+      # it is failing or not running.
+      - alert: OutboxBacklogStuck
+        expr: max by (job) (duraledger_outbox_oldest_pending_seconds) > 60
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oldest unpublished event is {{ $value | humanizeDuration }} old"
+          description: The activity feed is behind by at least this much. See OutboxPublishFailing.

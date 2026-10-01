@@ -1,0 +1,107 @@
+# DuraLedger alerts that mean the same thing in every environment. Prometheus rule format, so this one
+# file runs in the local Prometheus (otel-lgtm) and in Grafana Cloud's Mimir ruler, and `promtool test
+# rules` unit-tests it (common.test.yaml). Schedule-dependent thresholds live in local.yaml / gcp.yaml.
+#
+# Metric names are what OTLP -> Prometheus produces: dots become underscores, counters gain _total, and
+# timers are in MILLISECONDS (the OTLP registry's base unit), hence http_server_requests_milliseconds_*.
+# Every expression aggregates `by (job)`: each process pushes its own series (service.instance.id), and
+# on Cloud Run every cold start is a new instance, so per-instance alerts would be noise.
+groups:
+  - name: duraledger-correctness
+    rules:
+      # The one that matters most: the ledger no longer nets to zero per currency, or a stored balance no
+      # longer equals the sum of its entries. The DB triggers should make this impossible, so if it
+      # fires, something bypassed them (manual SQL, a migration, a bug in the triggers themselves).
+      # last_over_time: on Cloud Run the gauge is only pushed while an instance is up, and it must not
+      # "resolve" just because the instance that saw it scaled to zero.
+      - alert: LedgerInvariantViolated
+        expr: max by (job, check) (last_over_time(duraledger_reconciliation_violations[7h])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Reconciliation found {{ $value }} {{ $labels.check }} violation(s)"
+          description: >-
+            The ledger failed its own invariant check. Stop writes if it is growing, then
+            GET /actuator/reconciliation (or POST /internal/tasks/reconcile) for the offending
+            currencies/accounts. Ledger entries are immutable: the fix is a compensating posting.
+
+      # Optimistic locking gave up after max-optimistic-attempts: the client got a 409 for a transfer
+      # that was valid. Only possible with duraledger.transfer.locking=optimistic.
+      - alert: TransferRetriesExhausted
+        expr: sum by (job) (increase(duraledger_transfers_optimistic_exhausted_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanize }} transfer(s) exhausted optimistic retries in 10m"
+          description: Contention on hot accounts is beyond what optimistic retry absorbs; consider pessimistic locking.
+
+  - name: duraledger-api
+    rules:
+      # Share of all requests that were 5xx. The traffic floor stops one failed request at 3am from
+      # being "100% errors".
+      - alert: HighServerErrorRate
+        expr: |
+          (
+            sum by (job) (rate(http_server_requests_milliseconds_count{status=~"5.."}[5m]))
+              /
+            sum by (job) (rate(http_server_requests_milliseconds_count[5m]))
+          ) > 0.05
+          and
+          sum by (job) (rate(http_server_requests_milliseconds_count[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }}: {{ $value | humanizePercentage }} of requests are 5xx"
+          description: Usually the database (Neon suspended/unreachable, pool exhausted). Check hikaricp_connections_pending.
+
+      # Latency SLO on money movement: more than 1% of POSTs slower than 1 s. Uses the le="1000" SLO
+      # bucket directly instead of histogram_quantile: with only 6 buckets a p99 is an interpolated
+      # guess, while "fraction over 1 s" is exact because 1 s is a bucket boundary.
+      - alert: MoneyMovementSlow
+        expr: |
+          (
+            1 - (
+              sum by (job) (rate(http_server_requests_milliseconds_bucket{method="POST", uri=~"/transfers|/deposits|/withdrawals|/fx-convert", le="1000"}[5m]))
+                /
+              sum by (job) (rate(http_server_requests_milliseconds_count{method="POST", uri=~"/transfers|/deposits|/withdrawals|/fx-convert"}[5m]))
+            )
+          ) > 0.01
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of money-movement requests took over 1s"
+          description: Likely row-lock contention on hot accounts or a slow database. Check hikaricp_connections_pending.
+
+      # Why a custom counter and not http_server_requests: ApiKeyFilter runs before Spring's observation
+      # filter, so its 401/429s never show up there.
+      - alert: ApiKeyProbing
+        expr: sum by (job) (rate(duraledger_api_rejected_total{reason="unauthorized"}[5m])) * 60 > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }}: {{ $value | humanize }} requests/min rejected for a missing or wrong API key"
+          description: Someone is guessing keys, or a client shipped with a revoked key.
+
+      - alert: ClientsRateLimited
+        expr: sum by (job) (rate(duraledger_api_rejected_total{reason="rate_limited"}[5m])) * 60 > 5
+        for: 2m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.job }}: {{ $value | humanize }} requests/min rejected by the rate limit"
+          description: A client is looping or the per-key limit is too tight for real traffic.
+
+  - name: duraledger-events
+    rules:
+      # A publish to Pub/Sub failed. Nothing is lost - the row stays in the outbox and is retried - but
+      # the activity feed falls behind until it succeeds. How far behind is the env-specific backlog alert.
+      - alert: OutboxPublishFailing
+        expr: sum by (job) (increase(duraledger_outbox_publish_failures_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanize }} outbox publish failure(s) in the last 10m"
+          description: Pub/Sub unreachable or permission problem. Events are safe in the outbox and will be retried.

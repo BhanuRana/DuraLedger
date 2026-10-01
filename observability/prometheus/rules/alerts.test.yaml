@@ -1,0 +1,231 @@
+# Unit tests for the alert rules: `promtool test rules alerts.test.yaml` (see observability/README.md).
+# Each alert gets a case that must fire and a near-miss that must not, so a threshold or label typo
+# breaks the build instead of silently never paging. Series notation: 'a+bxN' = a, a+b, ... (N+1 samples),
+# one sample per interval; '_' = no sample.
+rule_files:
+  - common.yaml
+  - local.yaml
+evaluation_interval: 15s
+
+tests:
+  # --- LedgerInvariantViolated ------------------------------------------------------------------
+  - interval: 30s
+    input_series:
+      - series: 'duraledger_reconciliation_violations{job="ledger-service", instance="a", check="materialized_balance"}'
+        values: '0 0 1 1 1'
+      - series: 'duraledger_reconciliation_violations{job="ledger-service", instance="a", check="currency_zero_sum"}'
+        values: '0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: LedgerInvariantViolated
+        exp_alerts: []
+      - eval_time: 60s # fires on the first bad run: no `for`, a broken ledger never waits
+        alertname: LedgerInvariantViolated
+        exp_alerts:
+          - exp_labels: { severity: critical, job: ledger-service, check: materialized_balance }
+            exp_annotations:
+              summary: "Reconciliation found 1 materialized_balance violation(s)"
+              description: >-
+                The ledger failed its own invariant check. Stop writes if it is growing, then
+                GET /actuator/reconciliation (or POST /internal/tasks/reconcile) for the offending
+                currencies/accounts. Ledger entries are immutable: the fix is a compensating posting.
+
+  # Scale-to-zero: the instance that saw the violation is gone (no samples), the alert must hold.
+  - interval: 30m
+    input_series:
+      - series: 'duraledger_reconciliation_violations{job="ledger-service", instance="gone", check="currency_zero_sum"}'
+        values: '2 _ _ _ _ _ _ _ _ _'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: LedgerInvariantViolated
+        exp_alerts:
+          - exp_labels: { severity: critical, job: ledger-service, check: currency_zero_sum }
+            exp_annotations:
+              summary: "Reconciliation found 2 currency_zero_sum violation(s)"
+              description: "The ledger failed its own invariant check. Stop writes if it is growing, then GET /actuator/reconciliation (or POST /internal/tasks/reconcile) for the offending currencies/accounts. Ledger entries are immutable: the fix is a compensating posting."
+
+  # --- ReconciliationStale (local) --------------------------------------------------------------
+  - interval: 30s
+    input_series:
+      # healthy: runs every 60 s
+      - series: 'duraledger_reconciliation_last_run_timestamp_seconds{job="ledger-service", instance="a"}'
+        values: '0 0 60 60 120 120 180 180 240 240 300 300 360 360 420 420 480 480 540 540 600 600 660 660 720 720'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ReconciliationStale
+        exp_alerts: []
+
+  - interval: 30s
+    input_series:
+      # ran twice, then the scheduler died; the gauge keeps reporting the old timestamp
+      - series: 'duraledger_reconciliation_last_run_timestamp_seconds{job="ledger-service", instance="a"}'
+        values: '0 60 60 120 120+0x30'
+    alert_rule_test:
+      - eval_time: 6m # 360 - 120 = 240 s stale: fine
+        alertname: ReconciliationStale
+        exp_alerts: []
+      - eval_time: 7m30s # 450 - 120 = 330 s > 300, but `for: 2m` not yet served
+        alertname: ReconciliationStale
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ReconciliationStale
+        exp_alerts:
+          - exp_labels: { severity: critical, job: ledger-service }
+            exp_annotations:
+              summary: "Reconciliation last ran 8m 0s ago (every 60s expected)"
+              description: "The ledger is not being checked. LedgerInvariantViolated cannot fire while this does."
+
+  - interval: 30s
+    input_series:
+      # never ran at all: the gauge sits at its initial 0. (promtool's clock starts at 0, so time() - 0
+      # only passes 300 s at t=5m; in production time() is ~1.8e9 and this is just the `for: 2m`.)
+      - series: 'duraledger_reconciliation_last_run_timestamp_seconds{job="ledger-service", instance="a"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ReconciliationStale
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ReconciliationStale
+        exp_alerts:
+          - exp_labels: { severity: critical, job: ledger-service }
+            exp_annotations:
+              summary: "Reconciliation last ran 8m 0s ago (every 60s expected)"
+              description: "The ledger is not being checked. LedgerInvariantViolated cannot fire while this does."
+
+  # --- OutboxBacklogStuck (local) + OutboxPublishFailing ----------------------------------------
+  - interval: 30s
+    input_series:
+      # Pub/Sub goes away at t=60s: the oldest pending event ages, publishes fail every poll
+      - series: 'duraledger_outbox_oldest_pending_seconds{job="ledger-service", instance="a"}'
+        values: '0 0 0 30 60 90 120 150 180'
+      - series: 'duraledger_outbox_publish_failures_total{job="ledger-service", instance="a"}'
+        values: '0 0 0 150 300 450 600 750 900'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: OutboxPublishFailing
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: OutboxPublishFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, job: ledger-service }
+            exp_annotations:
+              summary: "300 outbox publish failure(s) in the last 10m"
+              description: "Pub/Sub unreachable or permission problem. Events are safe in the outbox and will be retried."
+      - eval_time: 2m # 90 s old, over 60 but `for: 1m` not served
+        alertname: OutboxBacklogStuck
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: OutboxBacklogStuck
+        exp_alerts:
+          - exp_labels: { severity: critical, job: ledger-service }
+            exp_annotations:
+              summary: "Oldest unpublished event is 3m 0s old"
+              description: "The activity feed is behind by at least this much. See OutboxPublishFailing."
+
+  # --- HighServerErrorRate ----------------------------------------------------------------------
+  - interval: 30s
+    input_series:
+      # 10% of 2 req/s are 500s
+      - series: 'http_server_requests_milliseconds_count{job="ledger-service", instance="a", uri="/transfers", status="201"}'
+        values: '0+54x20'
+      - series: 'http_server_requests_milliseconds_count{job="ledger-service", instance="a", uri="/transfers", status="500"}'
+        values: '0+6x20'
+      # quiet service: its only request failed (100%), but below the traffic floor
+      - series: 'http_server_requests_milliseconds_count{job="notification-service", instance="b", uri="/accounts/{id}/activity", status="500"}'
+        values: '0 1+0x19'
+    alert_rule_test:
+      - eval_time: 1m # over the threshold, `for: 2m` not served
+        alertname: HighServerErrorRate
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: HighServerErrorRate
+        exp_alerts:
+          - exp_labels: { severity: critical, job: ledger-service }
+            exp_annotations:
+              summary: "ledger-service: 10% of requests are 5xx"
+              description: "Usually the database (Neon suspended/unreachable, pool exhausted). Check hikaricp_connections_pending."
+
+  # --- MoneyMovementSlow ------------------------------------------------------------------------
+  - interval: 30s
+    input_series:
+      # 100 transfers per 30 s; 3 of them (3%) land above the 1 s bucket
+      - series: 'http_server_requests_milliseconds_bucket{job="ledger-service", instance="a", method="POST", uri="/transfers", status="201", le="1000"}'
+        values: '0+97x20'
+      - series: 'http_server_requests_milliseconds_count{job="ledger-service", instance="a", method="POST", uri="/transfers", status="201"}'
+        values: '0+100x20'
+      # GETs are slow too, but they are not money movement and must not count
+      - series: 'http_server_requests_milliseconds_bucket{job="ledger-service", instance="a", method="GET", uri="/accounts/{id}", status="200", le="1000"}'
+        values: '0+0x20'
+      - series: 'http_server_requests_milliseconds_count{job="ledger-service", instance="a", method="GET", uri="/accounts/{id}", status="200"}'
+        values: '0+100x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MoneyMovementSlow
+        exp_alerts:
+          - exp_labels: { severity: warning, job: ledger-service }
+            exp_annotations:
+              summary: "3% of money-movement requests took over 1s"
+              description: Likely row-lock contention on hot accounts or a slow database. Check hikaricp_connections_pending.
+
+  - interval: 30s
+    input_series:
+      # 0.5% slow: within SLO
+      - series: 'http_server_requests_milliseconds_bucket{job="ledger-service", instance="a", method="POST", uri="/deposits", status="201", le="1000"}'
+        values: '0+199x20'
+      - series: 'http_server_requests_milliseconds_count{job="ledger-service", instance="a", method="POST", uri="/deposits", status="201"}'
+        values: '0+200x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MoneyMovementSlow
+        exp_alerts: []
+
+  # --- ApiKeyProbing / ClientsRateLimited -------------------------------------------------------
+  - interval: 30s
+    input_series:
+      - series: 'duraledger_api_rejected_total{job="ledger-service", instance="a", reason="unauthorized"}'
+        values: '0+15x30' # 30/min
+      - series: 'duraledger_api_rejected_total{job="ledger-service", instance="a", reason="rate_limited"}'
+        values: '0+2x30' # 4/min: below 5
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ApiKeyProbing
+        exp_alerts:
+          - exp_labels: { severity: warning, job: ledger-service }
+            exp_annotations:
+              summary: "ledger-service: 30 requests/min rejected for a missing or wrong API key"
+              description: "Someone is guessing keys, or a client shipped with a revoked key."
+      - eval_time: 10m
+        alertname: ClientsRateLimited
+        exp_alerts: []
+
+  - interval: 30s
+    input_series:
+      - series: 'duraledger_api_rejected_total{job="notification-service", instance="a", reason="rate_limited"}'
+        values: '0+10x20' # 20/min
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ClientsRateLimited
+        exp_alerts:
+          - exp_labels: { severity: info, job: notification-service }
+            exp_annotations:
+              summary: "notification-service: 20 requests/min rejected by the rate limit"
+              description: "A client is looping or the per-key limit is too tight for real traffic."
+
+  # --- TransferRetriesExhausted -----------------------------------------------------------------
+  - interval: 30s
+    input_series:
+      - series: 'duraledger_transfers_optimistic_exhausted_total{job="ledger-service", instance="a"}'
+        values: '0 0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: TransferRetriesExhausted
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: TransferRetriesExhausted
+        exp_alerts:
+          - exp_labels: { severity: warning, job: ledger-service }
+            exp_annotations:
+              summary: "1 transfer(s) exhausted optimistic retries in 10m"
+              description: "Contention on hot accounts is beyond what optimistic retry absorbs; consider pessimistic locking."
+

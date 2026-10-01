@@ -1,0 +1,31 @@
+# Thresholds for Cloud Run (infra/gcp/deploy.sh): reconciliation via Cloud Scheduler every 6 h, events
+# published right after commit with an hourly outbox sweep as the safety net. Loaded into Grafana
+# Cloud's ruler alongside common.yaml.
+groups:
+  - name: duraledger-schedules-gcp
+    rules:
+      # 6 h schedule + an hour of slack. Scale-to-zero means an idle system pushes nothing, so "no data"
+      # is normal between runs; the 14 h window reaches back past the previous run. If there is no run in
+      # the window at all, absent_over_time fires instead - silence is exactly what a dead scheduler looks like.
+      - alert: ReconciliationStale
+        expr: |
+          time() - max by (job) (last_over_time(duraledger_reconciliation_last_run_timestamp_seconds[14h])) > 7 * 3600
+          or
+          absent_over_time(duraledger_reconciliation_last_run_timestamp_seconds[14h])
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Reconciliation has not run in over 7h (every 6h expected)
+          description: Check the Cloud Scheduler job `reconcile` and its OIDC invoker. LedgerInvariantViolated cannot fire while this does.
+
+      # Normal path publishes right after commit; a failed publish waits for the hourly outbox-sweep.
+      # Over one sweep plus slack means the sweep is not rescuing it either.
+      - alert: OutboxBacklogStuck
+        expr: max by (job) (last_over_time(duraledger_outbox_oldest_pending_seconds[2h])) > 65 * 60
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oldest unpublished event is {{ $value | humanizeDuration }} old"
+          description: Neither publish-after-commit nor the hourly sweep is getting events out. See OutboxPublishFailing.

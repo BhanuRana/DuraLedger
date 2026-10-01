@@ -1,0 +1,8 @@
+# Grafana provisioning: load every dashboard in /otel-lgtm/duraledger-dashboards (mounted by docker-compose.yml).
+apiVersion: 1
+providers:
+  - name: DuraLedger
+    type: file
+    allowUiUpdates: true   # tweak in the UI, then copy the change back into build_dashboard.py
+    options:
+      path: /otel-lgtm/duraledger-dashboards

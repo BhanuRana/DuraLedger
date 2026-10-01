@@ -1,0 +1,45 @@
+# otel-lgtm's own Prometheus config (grafana/otel-lgtm image), plus DuraLedger's alert rules.
+# Mounted over /otel-lgtm/prometheus.yaml by docker-compose.yml; rule paths are relative to it.
+---
+global:
+  scrape_native_histograms: true
+  # 15s, not the 1m default: alerts only change state once per evaluation, so proving them locally is quicker.
+  evaluation_interval: 15s
+rule_files:
+  - rules/common.yaml   # the same everywhere
+  - rules/local.yaml    # thresholds for the 60s local schedules (Grafana Cloud gets rules/gcp.yaml)
+otlp:
+  keep_identifying_resource_attributes: true
+  # Recommended attributes to be promoted to labels.
+  promote_resource_attributes:
+    - service.instance.id
+    - service.name
+    - service.namespace
+    - service.version
+    - cloud.availability_zone
+    - cloud.region
+    - container.name
+    - deployment.environment # backward compatibility
+    - deployment.environment.name
+    - k8s.cluster.name
+    - k8s.container.name
+    - k8s.cronjob.name
+    - k8s.daemonset.name
+    - k8s.deployment.name
+    - k8s.job.name
+    - k8s.namespace.name
+    - k8s.node.name
+    - k8s.pod.name
+    - k8s.replicaset.name
+    - k8s.statefulset.name
+    - host.name
+    - postgresql.database.name
+    - postgresql.schema.name
+    - postgresql.table.name
+    - postgresql.index.name
+    - database # used by otelcol/receiver/mongodb
+    - kafka.cluster.alias
+storage:
+  tsdb:
+    # A 10min time window is enough because it can easily absorb retries and network delays.
+    out_of_order_time_window: 10m

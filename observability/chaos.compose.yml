@@ -1,0 +1,12 @@
+# Overrides for the alerts that need ledger-service misconfigured to fire (used by prove-alerts.sh):
+#   docker compose -f docker-compose.yml -f observability/chaos.compose.yml --profile app up -d ledger-service
+services:
+  ledger-service:
+    environment:
+      # ReconciliationStale: the job is scheduled but never gets to run
+      DURALEDGER_RECONCILIATION_INITIAL_DELAY: 24h
+      # TransferRetriesExhausted: optimistic locking with no retries, so any contention exhausts it
+      DURALEDGER_TRANSFER_LOCKING: optimistic
+      DURALEDGER_TRANSFER_MAX_OPTIMISTIC_ATTEMPTS: "1"
+      # ClientsRateLimited: local runs with no limit by default
+      DURALEDGER_API_RATE_LIMIT_PER_MINUTE: "60"
