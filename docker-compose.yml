@@ -1,5 +1,6 @@
 # Local infrastructure, shared by every service in this repo (hence the root, not inside a service).
 # Spring Boot's Docker Compose support starts it on `./mvnw spring-boot:run`; `docker compose up -d` works too.
+# `docker compose --profile app up --build` also runs both services from their images (build the jars first).
 services:
   postgres:
     image: postgres:16-alpine
@@ -19,6 +20,33 @@ services:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
     command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=duraledger-local
     ports: ["8085:8085"]
+
+  # --- the services themselves, from their images ------------------------------------------
+  # The packaged jar has no Docker Compose support (Spring Boot leaves it out of production jars),
+  # so connection details come from environment variables, as they will in any real deployment.
+  ledger-service:
+    profiles: ["app"]
+    build: ./ledger-service
+    ports: ["8080:8080"]
+    environment: &app-env
+      SPRING_PROFILES_ACTIVE: local
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/duraledger
+      SPRING_DATASOURCE_USERNAME: duraledger
+      SPRING_DATASOURCE_PASSWORD: local-only-password
+      SPRING_CLOUD_GCP_PUBSUB_EMULATOR_HOST: pubsub:8085
+    mem_limit: 768m   # on purpose: the heap is sized from this limit, not from the host's RAM
+    depends_on:
+      postgres: { condition: service_healthy }
+      pubsub: { condition: service_started }
+  notification-service:
+    profiles: ["app"]
+    build: ./notification-service
+    ports: ["8081:8081"]
+    environment: *app-env
+    mem_limit: 512m
+    depends_on:
+      postgres: { condition: service_healthy }
+      pubsub: { condition: service_started }
 
 volumes:
   pgdata:
