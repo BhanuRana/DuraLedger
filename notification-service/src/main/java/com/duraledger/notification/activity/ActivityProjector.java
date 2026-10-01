@@ -44,6 +44,13 @@ public class ActivityProjector {
                     insert(eventId, event, uuid(event, "fromAccountId"), "DEBIT", uuid(event, "toAccountId"))
                     + insert(eventId, event, uuid(event, "toAccountId"), "CREDIT", uuid(event, "fromAccountId"));
             case "DepositCompleted" -> insert(eventId, event, uuid(event, "accountId"), "CREDIT", null);
+            case "WithdrawalCompleted" -> insert(eventId, event, uuid(event, "accountId"), "DEBIT", null);
+            // one conversion = two feed rows in two currencies, each wallet showing its own side
+            case "FxConverted" ->
+                    insert(eventId, event, uuid(event, "fromAccountId"), "DEBIT", uuid(event, "toAccountId"),
+                            event.get("fromAmountMinor").asLong(), event.get("fromCurrency").asString())
+                    + insert(eventId, event, uuid(event, "toAccountId"), "CREDIT", uuid(event, "fromAccountId"),
+                            event.get("toAmountMinor").asLong(), event.get("toCurrency").asString());
             default -> {
                 // Forward compatible: ledger-service may add event types before this service knows them.
                 // Throwing would nack the message and Pub/Sub would redeliver it forever.
@@ -60,6 +67,12 @@ public class ActivityProjector {
     }
 
     private int insert(long eventId, JsonNode event, UUID accountId, String direction, UUID counterparty) {
+        return insert(eventId, event, accountId, direction, counterparty,
+                event.get("amountMinor").asLong(), event.get("currency").asString());
+    }
+
+    private int insert(long eventId, JsonNode event, UUID accountId, String direction, UUID counterparty,
+                       long amountMinor, String currency) {
         return jdbc.sql("""
                         INSERT INTO notification.activity (event_id, account_id, transaction_id, event_type, direction,
                                                            amount_minor, currency, counterparty_account_id, occurred_at)
@@ -71,8 +84,8 @@ public class ActivityProjector {
                 .param("transactionId", uuid(event, "transactionId"))
                 .param("type", event.get("type").asString())
                 .param("direction", direction)
-                .param("amount", event.get("amountMinor").asLong())
-                .param("currency", event.get("currency").asString())
+                .param("amount", amountMinor)
+                .param("currency", currency)
                 .param("counterparty", counterparty)
                 .param("occurredAt", OffsetDateTime.parse(event.get("createdAt").asString()))
                 .update();

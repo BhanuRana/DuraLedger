@@ -86,6 +86,31 @@ class ActivityFeedTests {
 
 
     @Test
+    void withdrawals_and_fx_conversions_project_onto_the_right_wallets() {
+        var usd = UUID.randomUUID();
+        var hkd = UUID.randomUUID();
+
+        publish(EVENT_IDS.incrementAndGet(), "WithdrawalCompleted", Map.of(
+                "transactionId", UUID.randomUUID().toString(), "type", "WITHDRAWAL", "status", "COMPLETED",
+                "accountId", usd.toString(), "amountMinor", 300, "currency", "USD", "createdAt", OffsetDateTime.now().toString()));
+        publish(EVENT_IDS.incrementAndGet(), "FxConverted", Map.ofEntries(
+                Map.entry("transactionId", UUID.randomUUID().toString()), Map.entry("type", "FX_CONVERT"),
+                Map.entry("status", "COMPLETED"), Map.entry("fromAccountId", usd.toString()),
+                Map.entry("fromAmountMinor", 10_000), Map.entry("fromCurrency", "USD"),
+                Map.entry("toAccountId", hkd.toString()), Map.entry("toAmountMinor", 78_000),
+                Map.entry("toCurrency", "HKD"), Map.entry("rate", "7.800000"),
+                Map.entry("createdAt", OffsetDateTime.now().plusSeconds(1).toString())));
+
+        await().until(() -> feed(usd).size() == 2 && feed(hkd).size() == 1);
+        assertThat(feed(usd)).extracting(n -> n.get("direction").asString() + " " + n.get("amountMinor").asLong() + " " + n.get("currency").asString())
+                .containsExactly("DEBIT 10000 USD", "DEBIT 300 USD");
+        var credit = feed(hkd).get(0);
+        assertThat(credit.get("amountMinor").asLong()).isEqualTo(78_000);
+        assertThat(credit.get("currency").asString()).isEqualTo("HKD");
+        assertThat(credit.get("counterpartyAccountId").asString()).isEqualTo(usd.toString());
+    }
+
+    @Test
     void feed_is_newest_first_and_respects_limit() {
         var alice = UUID.randomUUID();
         for (int i = 1; i <= 5; i++) {
