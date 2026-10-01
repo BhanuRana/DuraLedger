@@ -154,3 +154,19 @@ The tests corrupt the ledger on purpose. A balance edited by +1 is reported as `
 Both services now ship as layered, non-root images (`MaxRAMPercentage=75`: a 576 MiB heap under a 768 MiB limit; the application layer is 135 kB) and run from them with `docker compose --profile app up --build`. The demo passes against the containers. The deployment design is [ADR 0006](docs/decisions/0006-cloud-run-neon-scale-to-zero.md): Cloud Run and Neon, scaling to zero.
 
 **Version drift.** The production database, a Neon project, runs **PostgreSQL 18.6**: that's what Flyway reported when it migrated it. Every test here ran on 16, so production would have run a version no test had touched. Compose, both services' test containers, the schema spec and jOOQ codegen all move to `postgres:18-alpine`, and codegen regenerated from 18. The 18 image keeps data in a versioned subdirectory and can't open a 16 data directory, so compose mounts a new volume at `/var/lib/postgresql`. All 62 tests pass on 18.6. Lesson: pin the test database to production's version, and read the version production reports rather than assuming it.
+
+## 2026-10-02: the same code in a scale-to-zero mode
+
+Cloud Run throttles CPU between requests and removes idle instances, so nothing that relies on a background thread can be trusted there. Three things relied on one, and each now has a second mode chosen by configuration, so the images stay identical:
+
+| Was | Local (default) | Cloud Run (`gcp` profile) |
+|---|---|---|
+| relay and reconciliation timers | `duraledger.tasks.trigger=internal`: in-process `@Scheduled` | `external`: `POST /internal/tasks/outbox-sweep` and `/reconcile`, called by Cloud Scheduler |
+| relay polling every 200 ms | poller | `publish-after-commit=true`: an `afterCommit` hook runs the relay once; the hourly sweep is the safety net |
+| streaming-pull subscriber | `duraledger.events.delivery=pull` | `push`: Pub/Sub POSTs each event to `/pubsub/push`; the status code is the ack |
+
+The service URLs are public, so the task and push endpoints check the `Authorization` header themselves: a Google-signed OIDC token, issued for this service's URL as audience, from one allow-listed service account. Anything else is a 403, including an `alg=none` token (unit-tested). The integration tests replace the verifier with a stub and run the whole context with no scheduler bean at all, so an event can only arrive through publish-after-commit, and a row inserted behind the API can only leave through the sweep.
+
+**Joining a finished transaction.** Inside `afterCommit` the committed transaction's connection is still bound to the thread, and Spring's documentation says code running there still participates in it. The relay's template used the default `REQUIRED` propagation, so it joined. The test passed anyway: its UPDATEs were committed only because Spring resets autocommit afterwards, and setting autocommit to true commits anything pending. That's correct by accident, so the relay now opens its own transaction with `REQUIRES_NEW`.
+
+The `gcp` profiles turn off Flyway on startup. Migrations ship as a separate Flyway image per service (`flyway/flyway:12.4.0`, matching the flyway-core the tests run) and run as Cloud Run Jobs before a new revision takes traffic. Hikari pools are 4 and 3 connections for Neon's free tier, the connection timeout is 10 s to cover Neon waking a suspended compute, and only `health` and `info` are exposed. `infra/gcp/` holds the one-time setup and the deploy script, which nothing runs yet.

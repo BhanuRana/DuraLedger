@@ -12,6 +12,7 @@ A multi-currency wallet ledger built with Java 21, Spring Boot, jOOQ, PostgreSQL
 - **Events:** each money movement writes its event to an outbox table in the same transaction as its ledger legs, so an event can't be lost and can't announce a change that rolled back. A relay publishes them to Pub/Sub (at-least-once, `FOR UPDATE SKIP LOCKED` so replicas split the work).
 - **Activity feed:** `notification-service` builds each wallet's feed from those events alone, with its own schema. It applies a redelivered event once and skips event types it doesn't know.
 - **Reconciliation:** every 60 seconds, in one consistent snapshot, the ledger checks itself: every currency nets to zero across all entries, and every stored balance equals the sum of its entries. Violations are exported as metrics and logged as errors; `POST /actuator/reconciliation` runs one on demand.
+- **Two run modes, one image:** locally the relay, reconciliation and the event consumer run on background threads. Under the `gcp` profile (Cloud Run, scaling to zero) they become requests instead: Cloud Scheduler calls `POST /internal/tasks/*`, events publish right after commit, and Pub/Sub pushes them to notification-service. Those endpoints accept only a Google-signed OIDC token from an allow-listed service account.
 - **Errors** are RFC 9457 `application/problem+json` with stable types, e.g. `urn:duraledger:problem:insufficient-funds`.
 
 Postgres enforces the ledger invariants itself: zero-sum per currency at commit, append-only entries, an entry's currency matching its account's, and no negative balance.
@@ -58,7 +59,10 @@ Everything runs against a real Postgres and the real Pub/Sub emulator through Te
 | `AccountApiTests` | Wallet creation, lookup and error types |
 | `ReconciliationTests` | Deliberate corruption is caught with exact amounts, including a one-sided entry written with the database triggers disabled |
 | `OutboxRelayTests` | A committed deposit reaches Pub/Sub (the emulator) and is marked published |
+| `CloudRunModeTests` | With no scheduler at all, an event still arrives (publish-after-commit), the sweep publishes a missed row, and task endpoints refuse callers without a valid token |
+| `GoogleOidcInvokerVerifierTests` | Missing, malformed and unsigned (`alg=none`) tokens are refused |
 | `ActivityFeedTests` (notification-service) | Both sides of a transfer in the right feeds, a redelivered event applied once, unknown event types skipped, newest first |
+| `PushDeliveryTests` (notification-service) | Pushed events land in both feeds and are acked with 204, a redelivered push is applied once, unauthenticated pushes get 403 |
 
 ## Run it
 
@@ -70,6 +74,8 @@ Requires JDK 21 and Docker (the build generates jOOQ classes from a real, migrat
 (cd ledger-service && ./mvnw spring-boot:run)        # :8080, starts Postgres + Pub/Sub emulator
 (cd notification-service && ./mvnw spring-boot:run)  # :8081
 ./scripts/demo.sh                                    # the whole story end to end (needs curl, jq)
+
+docker compose --profile app up --build              # or: both services as containers
 ```
 
 ## Docs
@@ -80,6 +86,8 @@ Requires JDK 21 and Docker (the build generates jOOQ classes from a real, migrat
     - [0003](docs/decisions/0003-idempotency-key-claimed-inside-the-transaction.md) Claim the idempotency key inside the transaction
     - [0004](docs/decisions/0004-pessimistic-locking-by-default.md) Pessimistic locking by default
     - [0005](docs/decisions/0005-materialize-account-balances.md) Store balances on the account row
+    - [0006](docs/decisions/0006-cloud-run-neon-scale-to-zero.md) Deploy on Cloud Run and Neon, scaling to zero
+- [`infra/gcp/`](infra/gcp): setup and deploy scripts for that design
 - [`BUILD_LOG.md`](BUILD_LOG.md): dated engineering journal
 
 ## License
