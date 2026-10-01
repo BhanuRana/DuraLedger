@@ -16,10 +16,10 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** The public API refuses strangers before any database work. */
+/** The public API refuses strangers before any database work, and a valid key is rate limited. */
 @Import(TestcontainersConfiguration.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@TestPropertySource(properties = "duraledger.api.keys=key-a,key-b")
+@TestPropertySource(properties = {"duraledger.api.keys=key-a,key-b", "duraledger.api.rate-limit-per-minute=3"})
 class ApiKeyTests {
 
     @Value("${local.server.port}") int port;
@@ -51,6 +51,20 @@ class ApiKeyTests {
     @Test
     void either_configured_key_works_so_keys_can_be_rotated_without_downtime() {
         assertThat(get("/accounts/" + UUID.randomUUID(), "key-b").getStatusCode().value()).isEqualTo(404); // authed, just unknown
+    }
+
+    @Test
+    void a_key_over_its_per_minute_limit_gets_429_with_retry_after() {
+        double before = rejected("rate_limited");
+        ResponseEntity<String> last = null;
+        int limited = 0;
+        for (int i = 0; i < 4; i++) {
+            last = get("/accounts/" + UUID.randomUUID(), "key-a");
+            limited += last.getStatusCode().value() == 429 ? 1 : 0;
+        }
+        assertThat(last.getStatusCode().value()).isEqualTo(429);
+        assertThat(Long.parseLong(last.getHeaders().getFirst("Retry-After"))).isBetween(1L, 60L);
+        assertThat(rejected("rate_limited") - before).isEqualTo(limited);
     }
 
     private double rejected(String reason) {
