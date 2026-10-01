@@ -19,6 +19,7 @@ import static com.duraledger.ledger.ledger.Leg.credit;
 import static com.duraledger.ledger.ledger.Leg.debit;
 import static com.duraledger.ledger.ledger.TransactionType.DEPOSIT;
 import static com.duraledger.ledger.ledger.TransactionType.TRANSFER;
+import static com.duraledger.ledger.ledger.TransactionType.WITHDRAWAL;
 
 /**
  * Each money movement is ONE database transaction: idempotency claim -> lock -> checks -> ledger legs
@@ -96,6 +97,30 @@ class MoneyMovementService {
             var response = new DepositResponse(posted.transactionId(), DEPOSIT.name(), "COMPLETED",
                     account.id(), request.amountMinor(), request.currency(), posted.createdAt());
             outbox.append("transaction", posted.transactionId(), "DepositCompleted", response);
+            return new Outcome(201, response);
+        });
+    }
+
+    /** Money leaving to the outside world: debit the user, credit the currency's EXTERNAL_CLEARING account. */
+    @Transactional
+    public Result withdraw(String idempotencyKey, WithdrawalRequest request) {
+        return idempotency.execute(idempotencyKey, "POST /withdrawals", request, () -> {
+            // A debit, so it's serialized exactly like a transfer's source account.
+            Account account = properties.locking() == LockingMode.PESSIMISTIC
+                    ? userAccount(accounts.lockInIdOrder(request.accountId()).get(request.accountId()), request.accountId())
+                    : userAccount(request.accountId());
+            requireCurrency(account, request.currency());
+            requireFunds(account, request.amountMinor());
+            Account clearing = accounts.systemAccount("EXTERNAL_CLEARING", request.currency());
+
+            var posted = poster.post(WITHDRAWAL, idempotencyKey, List.of(
+                    debit(account.id(), request.currency(), request.amountMinor()),
+                    credit(clearing.id(), request.currency(), request.amountMinor())),
+                    new VersionGuard(account.id(), account.version()));
+
+            var response = new WithdrawalResponse(posted.transactionId(), WITHDRAWAL.name(), "COMPLETED",
+                    account.id(), request.amountMinor(), request.currency(), posted.createdAt());
+            outbox.append("transaction", posted.transactionId(), "WithdrawalCompleted", response);
             return new Outcome(201, response);
         });
     }

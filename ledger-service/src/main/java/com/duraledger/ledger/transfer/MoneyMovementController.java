@@ -31,4 +31,10 @@ class MoneyMovementController {
                                     @Valid @RequestBody TransferRequest request) {
         return transfers.transfer(idempotencyKey, request).toResponseEntity();
     }
+
+    @PostMapping("/withdrawals")
+    ResponseEntity<String> withdraw(@RequestHeader("Idempotency-Key") @Size(min = 1, max = 255) String idempotencyKey,
+                                    @Valid @RequestBody WithdrawalRequest request) {
+        return transfers.withdraw(idempotencyKey, request).toResponseEntity();
+    }
 }

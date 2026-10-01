@@ -220,6 +220,44 @@ class MoneyMovementApiTests {
         assertMaterializedMatchesLedger(alice, bob);
     }
 
+    @Test
+    void withdrawal_moves_money_out_through_the_clearing_account_and_refuses_overdraft() {
+        var alice = account("USD");
+        deposit(alice, 1_000, "USD");
+
+        var ok = move("/withdrawals", key(), Map.of("accountId", alice, "amountMinor", 400, "currency", "USD"));
+        var tooMuch = move("/withdrawals", key(), Map.of("accountId", alice, "amountMinor", 601, "currency", "USD"));
+
+        assertThat(ok.status()).isEqualTo(201);
+        assertThat(ok.body().get("type").asString()).isEqualTo("WITHDRAWAL");
+        assertThat(problemType(tooMuch)).isEqualTo("urn:duraledger:problem:insufficient-funds");
+        assertThat(balance(alice)).isEqualTo(600);
+        var txId = UUID.fromString(ok.body().get("transactionId").asString());
+        assertThat(jdbc.sql("SELECT event_type FROM outbox WHERE aggregate_id = ?").param(txId)
+                .query(String.class).list()).containsExactly("WithdrawalCompleted");
+        assertMaterializedMatchesLedger(alice);
+    }
+
+    /** Withdrawals and transfers draining the same account at once share its lock (or its version). */
+    @Test
+    void concurrent_withdrawals_and_transfers_never_overdraw() throws Exception {
+        var alice = account("EUR");
+        var bob = account("EUR");
+        deposit(alice, 1_000, "EUR");
+
+        var responses = runConcurrently(20, () -> ThreadLocalRandom.current().nextBoolean()
+                ? move("/withdrawals", key(), Map.of("accountId", alice, "amountMinor", 100, "currency", "EUR"))
+                : transfer(key(), alice, bob, 100, "EUR"));
+
+        var succeeded = responses.stream().filter(r -> r.status() == 201).count();
+        assertThat(responses).extracting(Response::status).allMatch(s -> s == 201 || s == 422 || s == 409);
+        assertThat(balance(alice)).isEqualTo(1_000 - 100 * succeeded).isGreaterThanOrEqualTo(0);
+        assertMaterializedMatchesLedger(alice, bob);
+        if (strictlySerialized()) {
+            assertThat(succeeded).isEqualTo(10);
+        }
+    }
+
     /** The event commits with the money, once, and only if the money moved. */
     @Test
     void each_money_movement_writes_exactly_one_outbox_event_and_refusals_write_none() {
@@ -280,6 +318,10 @@ class MoneyMovementApiTests {
     private Response transfer(String key, UUID from, UUID to, long amount, String currency) {
         return call(http.post().uri("/transfers").header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("fromAccountId", from, "toAccountId", to, "amountMinor", amount, "currency", currency)));
+    }
+
+    private Response move(String path, String key, Map<String, Object> body) {
+        return call(http.post().uri(path).header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON).body(body));
     }
 
     private long balance(UUID account) {
