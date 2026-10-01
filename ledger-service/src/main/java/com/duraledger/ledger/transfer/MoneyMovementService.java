@@ -11,13 +11,17 @@ import com.duraledger.ledger.outbox.Outbox;
 import com.duraledger.ledger.web.LedgerRejection;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.json.JsonMapper;
 
+import java.math.RoundingMode;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static com.duraledger.ledger.ledger.Leg.credit;
 import static com.duraledger.ledger.ledger.Leg.debit;
 import static com.duraledger.ledger.ledger.TransactionType.DEPOSIT;
+import static com.duraledger.ledger.ledger.TransactionType.FX_CONVERT;
 import static com.duraledger.ledger.ledger.TransactionType.TRANSFER;
 import static com.duraledger.ledger.ledger.TransactionType.WITHDRAWAL;
 
@@ -33,14 +37,18 @@ class MoneyMovementService {
     private final IdempotencyService idempotency;
     private final TransferProperties properties;
     private final Outbox outbox;
+    private final FxRates fx;
+    private final JsonMapper json;
 
     MoneyMovementService(AccountRepository accounts, LedgerPoster poster, IdempotencyService idempotency,
-                         TransferProperties properties, Outbox outbox) {
+                         TransferProperties properties, Outbox outbox, FxRates fx, JsonMapper json) {
         this.accounts = accounts;
         this.poster = poster;
         this.idempotency = idempotency;
         this.properties = properties;
         this.outbox = outbox;
+        this.fx = fx;
+        this.json = json;
     }
 
     @Transactional
@@ -121,6 +129,62 @@ class MoneyMovementService {
             var response = new WithdrawalResponse(posted.transactionId(), WITHDRAWAL.name(), "COMPLETED",
                     account.id(), request.amountMinor(), request.currency(), posted.createdAt());
             outbox.append("transaction", posted.transactionId(), "WithdrawalCompleted", response);
+            return new Outcome(201, response);
+        });
+    }
+
+    /**
+     * FX conversion between two wallets of the same user, as FOUR legs through the per-currency FX_POOL
+     * accounts, so each currency nets to zero on its own (docs/decisions/0002):
+     * <pre>
+     *   user[from]  DEBIT  amount       FX_POOL[from] CREDIT amount        (from-currency legs)
+     *   FX_POOL[to] DEBIT  converted    user[to]      CREDIT converted     (to-currency legs)
+     * </pre>
+     */
+    @Transactional
+    public Result convert(String idempotencyKey, FxConversionRequest request) {
+        return idempotency.execute(idempotencyKey, "POST /fx-convert", request, () -> {
+            Account source = userAccount(request.fromAccountId());
+            if (source.currency().equals(request.toCurrency())) {
+                throw LedgerRejection.unprocessable("same-currency", "Account already holds " + request.toCurrency());
+            }
+            UUID targetId = accounts.findUserAccount(source.userId(), request.toCurrency())
+                    .orElseThrow(() -> LedgerRejection.unprocessable("no-target-wallet",
+                            "User has no " + request.toCurrency() + " account; create one first"))
+                    .id();
+
+            Account from;
+            Account to;
+            if (properties.locking() == LockingMode.PESSIMISTIC) {
+                var locked = accounts.lockInIdOrder(source.id(), targetId);
+                from = locked.get(source.id());
+                to = locked.get(targetId);
+            } else {
+                from = source;
+                to = accounts.find(targetId).orElseThrow();
+            }
+            requireFunds(from, request.amountMinor());
+
+            long converted = fx.convert(request.amountMinor(), from.currency(), to.currency());
+            if (converted <= 0) {
+                throw LedgerRejection.unprocessable("amount-too-small",
+                        request.amountMinor() + " " + from.currency() + " minor units convert to less than 1 "
+                                + to.currency() + " minor unit");
+            }
+            String rate = fx.rate(from.currency(), to.currency()).setScale(6, RoundingMode.HALF_EVEN).toPlainString();
+
+            var posted = poster.post(FX_CONVERT, idempotencyKey, List.of(
+                            debit(from.id(), from.currency(), request.amountMinor()),
+                            credit(accounts.systemAccount("FX_POOL", from.currency()).id(), from.currency(), request.amountMinor()),
+                            debit(accounts.systemAccount("FX_POOL", to.currency()).id(), to.currency(), converted),
+                            credit(to.id(), to.currency(), converted)),
+                    new VersionGuard(from.id(), from.version()),
+                    json.writeValueAsString(Map.of("rate", rate, "fromCurrency", from.currency(), "toCurrency", to.currency())));
+
+            var response = new FxConversionResponse(posted.transactionId(), FX_CONVERT.name(), "COMPLETED",
+                    from.id(), request.amountMinor(), from.currency(), to.id(), converted, to.currency(), rate,
+                    posted.createdAt());
+            outbox.append("transaction", posted.transactionId(), "FxConverted", response);
             return new Outcome(201, response);
         });
     }

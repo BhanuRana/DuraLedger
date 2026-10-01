@@ -1,6 +1,7 @@
 package com.duraledger.ledger.ledger;
 
 import org.jooq.DSLContext;
+import org.jooq.JSONB;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +38,13 @@ public class LedgerPoster {
     /** @throws OptimisticConflictException if {@code guard}'s account changed since it was read */
     @Transactional(propagation = Propagation.MANDATORY)
     public Posted post(TransactionType type, String idempotencyKey, List<Leg> legs, VersionGuard guard) {
+        return post(type, idempotencyKey, legs, guard, null);
+    }
+
+    /** @param metadataJson stored on the transaction row (e.g. the FX rate used), or null for none */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Posted post(TransactionType type, String idempotencyKey, List<Leg> legs, VersionGuard guard,
+                       String metadataJson) {
         if (legs.size() < 2) {
             throw new IllegalArgumentException("A posting needs at least two legs, got " + legs.size());
         }
@@ -44,6 +52,7 @@ public class LedgerPoster {
                 .set(TRANSACTIONS.TYPE, type.name())
                 .set(TRANSACTIONS.STATUS, "COMPLETED")
                 .set(TRANSACTIONS.IDEMPOTENCY_KEY, idempotencyKey)
+                .set(TRANSACTIONS.METADATA, JSONB.valueOf(metadataJson == null ? "{}" : metadataJson))
                 .returning(TRANSACTIONS.ID, TRANSACTIONS.CREATED_AT)
                 .fetchSingle();
 

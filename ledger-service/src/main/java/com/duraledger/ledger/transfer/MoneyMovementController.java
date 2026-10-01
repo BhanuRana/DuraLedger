@@ -37,4 +37,10 @@ class MoneyMovementController {
                                     @Valid @RequestBody WithdrawalRequest request) {
         return transfers.withdraw(idempotencyKey, request).toResponseEntity();
     }
+
+    @PostMapping("/fx-convert")
+    ResponseEntity<String> convert(@RequestHeader("Idempotency-Key") @Size(min = 1, max = 255) String idempotencyKey,
+                                   @Valid @RequestBody FxConversionRequest request) {
+        return transfers.convert(idempotencyKey, request).toResponseEntity();
+    }
 }

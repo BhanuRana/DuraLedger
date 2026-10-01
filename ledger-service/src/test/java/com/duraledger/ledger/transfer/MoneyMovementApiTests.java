@@ -258,6 +258,58 @@ class MoneyMovementApiTests {
         }
     }
 
+    @Test
+    void fx_conversion_is_four_legs_through_the_fx_pools_and_records_its_rate() {
+        var user = UUID.randomUUID();
+        var usd = accountFor(user, "USD");
+        var hkd = accountFor(user, "HKD");
+        deposit(usd, 10_000, "USD");
+
+        var fx = move("/fx-convert", key(), Map.of("fromAccountId", usd, "toCurrency", "HKD", "amountMinor", 10_000));
+
+        assertThat(fx.status()).isEqualTo(201);
+        assertThat(fx.body().get("toAmountMinor").asLong()).isEqualTo(78_000);   // 100.00 USD -> 780.00 HKD
+        assertThat(fx.body().get("rate").asString()).isEqualTo("7.800000");
+        assertThat(balance(usd)).isZero();
+        assertThat(balance(hkd)).isEqualTo(78_000);
+        var txId = fx.body().get("transactionId").asString();
+        assertThat(get("/transactions/" + txId).body().get("entries")).hasSize(4);
+        assertThat(jdbc.sql("SELECT metadata->>'rate' FROM transactions WHERE id = ?::uuid").param(txId)
+                .query(String.class).single()).isEqualTo("7.800000");
+        assertMaterializedMatchesLedger(usd, hkd);
+    }
+
+    @Test
+    void fx_rounds_down_so_the_house_keeps_the_sub_cent_remainder() {
+        var user = UUID.randomUUID();
+        var hkd = accountFor(user, "HKD");
+        var usd = accountFor(user, "USD");
+        deposit(hkd, 1_000, "HKD");
+
+        // 10.00 HKD / 7.80 = 1.28205... USD -> 128 cents, not 129
+        var fx = move("/fx-convert", key(), Map.of("fromAccountId", hkd, "toCurrency", "USD", "amountMinor", 1_000));
+
+        assertThat(fx.body().get("toAmountMinor").asLong()).isEqualTo(128);
+        assertThat(balance(usd)).isEqualTo(128);
+    }
+
+    @Test
+    void fx_refuses_missing_target_wallets_and_amounts_that_round_to_nothing() {
+        var user = UUID.randomUUID();
+        var hkd = accountFor(user, "HKD");
+        accountFor(user, "USD");
+        deposit(hkd, 1_000, "HKD");
+
+        var noWallet = move("/fx-convert", key(), Map.of("fromAccountId", hkd, "toCurrency", "EUR", "amountMinor", 100));
+        var tooSmall = move("/fx-convert", key(), Map.of("fromAccountId", hkd, "toCurrency", "USD", "amountMinor", 7));
+        var sameCurrency = move("/fx-convert", key(), Map.of("fromAccountId", hkd, "toCurrency", "HKD", "amountMinor", 100));
+
+        assertThat(problemType(noWallet)).isEqualTo("urn:duraledger:problem:no-target-wallet");
+        assertThat(problemType(tooSmall)).isEqualTo("urn:duraledger:problem:amount-too-small");
+        assertThat(problemType(sameCurrency)).isEqualTo("urn:duraledger:problem:same-currency");
+        assertThat(balance(hkd)).isEqualTo(1_000);
+    }
+
     /** The event commits with the money, once, and only if the money moved. */
     @Test
     void each_money_movement_writes_exactly_one_outbox_event_and_refusals_write_none() {
@@ -318,6 +370,13 @@ class MoneyMovementApiTests {
     private Response transfer(String key, UUID from, UUID to, long amount, String currency) {
         return call(http.post().uri("/transfers").header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("fromAccountId", from, "toAccountId", to, "amountMinor", amount, "currency", currency)));
+    }
+
+    private UUID accountFor(UUID userId, String currency) {
+        var response = call(http.post().uri("/accounts").contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("userId", userId, "currency", currency)));
+        assertThat(response.status()).isEqualTo(201);
+        return UUID.fromString(response.body().get("id").asString());
     }
 
     private Response move(String path, String key, Map<String, Object> body) {

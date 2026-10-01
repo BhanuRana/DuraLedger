@@ -48,6 +48,13 @@ public class AccountRepository {
                 .collect(Collectors.toMap(Account::id, Function.identity()));
     }
 
+    /** The same user's wallet in another currency (one per user and currency). */
+    public Optional<Account> findUserAccount(UUID userId, String currency) {
+        return db.selectFrom(ACCOUNTS)
+                .where(ACCOUNTS.USER_ID.eq(userId), ACCOUNTS.CURRENCY.eq(currency), ACCOUNTS.KIND.eq("USER"))
+                .fetchOptional(AccountRepository::toAccount);
+    }
+
     public Account systemAccount(String kind, String currency) {
         return db.selectFrom(ACCOUNTS)
                 .where(ACCOUNTS.KIND.eq(kind), ACCOUNTS.CURRENCY.eq(currency))

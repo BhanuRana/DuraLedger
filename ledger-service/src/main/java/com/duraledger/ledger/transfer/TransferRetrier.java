@@ -10,7 +10,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Supplier;
 
 /**
- * Retries a debit (transfer or withdrawal) that lost an optimistic race. Lives OUTSIDE the @Transactional boundary on
+ * Retries a debit (transfer, withdrawal or FX conversion) that lost an optimistic race. Lives OUTSIDE the @Transactional boundary on
  * purpose: each attempt must be a brand-new DB transaction that re-reads balance and version.
  *
  * <p>Retrying is safe because the failed attempt rolled back everything, its idempotency claim
@@ -38,6 +38,10 @@ class TransferRetrier {
 
     Result withdraw(String idempotencyKey, WithdrawalRequest request) {
         return withRetries(() -> service.withdraw(idempotencyKey, request));
+    }
+
+    Result convert(String idempotencyKey, FxConversionRequest request) {
+        return withRetries(() -> service.convert(idempotencyKey, request));
     }
 
     /** Each attempt goes through the service's @Transactional proxy: a fresh DB transaction. */
