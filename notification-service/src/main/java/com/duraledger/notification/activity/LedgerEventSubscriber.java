@@ -1,5 +1,6 @@
 package com.duraledger.notification.activity;
 
+import com.google.api.gax.rpc.AlreadyExistsException;
 import com.google.cloud.pubsub.v1.Subscriber;
 import com.google.cloud.spring.pubsub.PubSubAdmin;
 import com.google.cloud.spring.pubsub.core.PubSubTemplate;
@@ -40,21 +41,28 @@ class LedgerEventSubscriber {
 
     @EventListener(ApplicationReadyEvent.class)
     void start() {
-        ensureTopology();
+        ensureTopology(admin, properties);
         subscriber = pubsub.subscribe(properties.subscription(), this::handle);
         log.info("Subscribed to {}", properties.subscription());
     }
 
-    /** Either service may start first, so each makes sure the topic exists. */
-    void ensureTopology() {
+    /**
+     * Either service may start first, and several pods start at once, so create and tolerate
+     * ALREADY_EXISTS. Check-then-create raced and crashed a pod on the kind cluster.
+     */
+    static void ensureTopology(PubSubAdmin admin, EventsProperties properties) {
         if (!properties.createTopology()) {
             return;
         }
-        if (admin.getTopic(properties.topic()) == null) {
+        try {
             admin.createTopic(properties.topic());
+        } catch (AlreadyExistsException e) {
+            // another pod, or ledger-service, won the race
         }
-        if (admin.getSubscription(properties.subscription()) == null) {
+        try {
             admin.createSubscription(properties.subscription(), properties.topic());
+        } catch (AlreadyExistsException e) {
+            // likewise
         }
     }
 

@@ -1,6 +1,7 @@
 package com.duraledger.notification.activity;
 
 import com.duraledger.notification.TestcontainersConfiguration;
+import com.google.cloud.spring.pubsub.PubSubAdmin;
 import com.google.cloud.spring.pubsub.core.PubSubTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,9 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,6 +38,7 @@ class ActivityFeedTests {
     @Autowired PubSubTemplate pubsub;
     @Autowired EventsProperties properties;
     @Autowired JsonMapper json;
+    @Autowired PubSubAdmin admin;
 
     RestClient http;
 
@@ -42,6 +47,32 @@ class ActivityFeedTests {
         http = RestClient.builder().defaultHeader("X-Api-Key", "local-dev-key").baseUrl("http://localhost:" + port).build();
     }
 
+
+    /** Both services and several pods start at once, each making sure the topic and subscription exist. */
+    @Test
+    void concurrent_topology_creation_on_startup_does_not_crash_any_pod() throws Exception {
+        var topic = "race-" + UUID.randomUUID();   // a fresh pair, so the live subscription stays untouched
+        var probe = new EventsProperties(topic, topic + ".sub", true);
+        var failures = new ConcurrentLinkedQueue<Throwable>();
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var gate = new CountDownLatch(1);
+            for (int i = 0; i < 8; i++) {
+                pool.submit(() -> {
+                    gate.await();
+                    try {
+                        LedgerEventSubscriber.ensureTopology(admin, probe);
+                    } catch (Throwable t) {
+                        failures.add(t);
+                    }
+                    return null;
+                });
+            }
+            gate.countDown();
+        }
+
+        assertThat(failures).as("pods that crashed on startup").isEmpty();
+        assertThat(admin.getSubscription(topic + ".sub")).isNotNull();
+    }
 
     @Test
     void a_transfer_shows_up_in_both_accounts_feeds_with_opposite_directions() {

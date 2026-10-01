@@ -20,6 +20,9 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -35,6 +38,7 @@ class OutboxRelayTests {
     @Autowired OutboxProperties properties;
     @Autowired JdbcClient jdbc;
     @Autowired JsonMapper json;
+    @Autowired OutboxRelay relay;
 
     RestClient http;
     String subscription;
@@ -45,6 +49,32 @@ class OutboxRelayTests {
         await().until(() -> admin.getTopic(properties.topic()) != null); // created on ApplicationReady
         subscription = "relay-test-" + UUID.randomUUID();
         admin.createSubscription(subscription, properties.topic()); // sees only messages published from now on
+    }
+
+    /** Several pods start at once: all try to create the missing topic, and none may crash. */
+    @Test
+    void concurrent_topic_creation_on_startup_does_not_crash_any_pod() throws Exception {
+        admin.deleteTopic(properties.topic());   // back to a fresh cluster: nobody has created it yet
+
+        var failures = new ConcurrentLinkedQueue<Throwable>();
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var gate = new CountDownLatch(1);
+            for (int i = 0; i < 8; i++) {
+                pool.submit(() -> {
+                    gate.await();
+                    try {
+                        relay.createTopologyIfConfigured();
+                    } catch (Throwable t) {
+                        failures.add(t);
+                    }
+                    return null;
+                });
+            }
+            gate.countDown();
+        }
+
+        assertThat(failures).as("pods that crashed on startup").isEmpty();
+        assertThat(admin.getTopic(properties.topic())).isNotNull();
     }
 
     @Test

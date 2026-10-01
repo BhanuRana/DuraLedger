@@ -1,6 +1,7 @@
 package com.duraledger.ledger.outbox;
 
 import com.duraledger.ledger.jooq.tables.records.OutboxRecord;
+import com.google.api.gax.rpc.AlreadyExistsException;
 import com.google.cloud.spring.pubsub.PubSubAdmin;
 import com.google.cloud.spring.pubsub.core.PubSubTemplate;
 import io.micrometer.core.instrument.Counter;
@@ -67,11 +68,21 @@ public class OutboxRelay {
         meters.gauge("duraledger.outbox.oldest.pending.seconds", this, OutboxRelay::oldestPendingAgeSeconds);
     }
 
+    /**
+     * Create and tolerate ALREADY_EXISTS, not "if missing, create": when several pods start at once, two
+     * can both see the topic missing, and the loser crashed (found on the kind cluster). It's the same
+     * check-then-act race the idempotency keys avoid.
+     */
     @EventListener(ApplicationReadyEvent.class)
     void createTopologyIfConfigured() {
-        if (properties.createTopology() && admin.getTopic(properties.topic()) == null) {
+        if (!properties.createTopology()) {
+            return;
+        }
+        try {
             admin.createTopic(properties.topic());
             log.info("Created Pub/Sub topic {}", properties.topic());
+        } catch (AlreadyExistsException e) {
+            log.debug("Pub/Sub topic {} already exists", properties.topic());
         }
     }
 
