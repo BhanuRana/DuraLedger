@@ -6,6 +6,7 @@ import com.google.cloud.spring.pubsub.core.PubSubTemplate;
 import com.google.cloud.spring.pubsub.support.BasicAcknowledgeablePubsubMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
@@ -14,8 +15,12 @@ import org.springframework.stereotype.Component;
 /**
  * Streaming-pull subscriber on ledger.events. Acks only after the projection committed; on failure it
  * nacks, so Pub/Sub redelivers.
+ *
+ * <p>duraledger.events.delivery=pull (default: local, always-on hosts). On Cloud Run nothing may hold
+ * a connection open between requests, so {@link PushController} receives events instead.
  */
 @Component
+@ConditionalOnProperty(name = "duraledger.events.delivery", havingValue = "pull", matchIfMissing = true)
 class LedgerEventSubscriber {
 
     private static final Logger log = LoggerFactory.getLogger(LedgerEventSubscriber.class);
