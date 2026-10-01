@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: pubsub }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: pubsub } }
+  template:
+    metadata: { labels: { app: pubsub } }
+    spec:
+      containers:
+        - name: emulator
+          image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+          command: [gcloud, beta, emulators, pubsub, start, --host-port=0.0.0.0:8085, --project=duraledger-local]
+          ports: [{ containerPort: 8085 }]
+          readinessProbe: { tcpSocket: { port: 8085 }, periodSeconds: 2 }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 768Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: pubsub }
+spec:
+  selector: { app: pubsub }
+  ports: [{ port: 8085 }]

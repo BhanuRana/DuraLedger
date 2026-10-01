@@ -1,0 +1,2 @@
+namespace: duraledger
+resources: [ledger-service.yaml, notification-service.yaml]

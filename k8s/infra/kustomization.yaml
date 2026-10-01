@@ -1,0 +1,2 @@
+namespace: duraledger
+resources: [namespace.yaml, secrets.yaml, postgres.yaml, pubsub.yaml]

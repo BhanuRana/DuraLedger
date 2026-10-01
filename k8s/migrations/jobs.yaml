@@ -1,0 +1,40 @@
+# Flyway as Kubernetes Jobs, run to completion BEFORE the apps roll out (k8s/up.sh orders it).
+# Apps run with SPRING_FLYWAY_ENABLED=false: N replicas never race to migrate, and pods start faster.
+# In a GitOps setup this ordering would be an Argo CD sync wave / Helm pre-upgrade hook.
+apiVersion: batch/v1
+kind: Job
+metadata: { name: ledger-migrate }
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: flyway
+          image: duraledger/ledger-migrations:dev
+          imagePullPolicy: IfNotPresent
+          args: [migrate]
+          env:
+            - { name: FLYWAY_URL, value: "jdbc:postgresql://postgres:5432/duraledger" }
+            - { name: FLYWAY_USER, valueFrom: { secretKeyRef: { name: duraledger-secrets, key: db-username } } }
+            - { name: FLYWAY_PASSWORD, valueFrom: { secretKeyRef: { name: duraledger-secrets, key: db-password } } }
+---
+apiVersion: batch/v1
+kind: Job
+metadata: { name: notification-migrate }
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: flyway
+          image: duraledger/notification-migrations:dev
+          imagePullPolicy: IfNotPresent
+          args: [migrate]
+          env:
+            - { name: FLYWAY_URL, value: "jdbc:postgresql://postgres:5432/duraledger" }
+            - { name: FLYWAY_USER, valueFrom: { secretKeyRef: { name: duraledger-secrets, key: db-username } } }
+            - { name: FLYWAY_PASSWORD, valueFrom: { secretKeyRef: { name: duraledger-secrets, key: db-password } } }
+            - { name: FLYWAY_SCHEMAS, value: notification }
+            - { name: FLYWAY_DEFAULT_SCHEMA, value: notification }

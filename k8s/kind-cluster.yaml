@@ -1,0 +1,11 @@
+# Local Kubernetes for DuraLedger: a free cluster that runs the same images as Cloud Run.
+# NodePorts are mapped to the host so traffic goes through kube-proxy's load balancing across
+# ready pods (kubectl port-forward pins ONE pod, which would break during a rolling update).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: duraledger
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - { containerPort: 30080, hostPort: 18080 }   # ledger-service
+      - { containerPort: 30081, hostPort: 18081 }   # notification-service
