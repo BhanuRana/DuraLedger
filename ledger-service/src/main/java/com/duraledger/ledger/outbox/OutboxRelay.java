@@ -13,6 +13,7 @@ import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.OffsetDateTime;
@@ -52,7 +53,11 @@ public class OutboxRelay {
     OutboxRelay(DSLContext db, PubSubTemplate pubsub, PubSubAdmin admin, OutboxProperties properties,
                 PlatformTransactionManager transactionManager, MeterRegistry meters) {
         this.db = db;
+        // REQUIRES_NEW: publishPending() is also called from Outbox's afterCommit hook, where the finished
+        // transaction's connection is still bound. A joining template would run inside it, and its
+        // UPDATEs would only commit as a side effect of Spring resetting autocommit afterwards.
         this.tx = new TransactionTemplate(transactionManager);
+        this.tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.publishFailures = meters.counter("duraledger.outbox.publish.failures");
         this.pubsub = pubsub;
         this.admin = admin;
