@@ -1,0 +1,77 @@
+<!doctype html>
+<!-- GitHub social preview. Render: docs/brand/render.sh -> docs/social-preview.png (1280x640) -->
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=block" rel="stylesheet">
+<style>
+  :root { --bg: #F4F7FB; --navy: #0B2A5B; --text: #44546E; --blue: #0473EA; --green: #38D200; --greenInk: #1B9A3E; --rule: #E3E9F2; }
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; }
+  body { background: var(--bg); font-family: 'Manrope', sans-serif; color: var(--navy); position: relative; }
+  svg.ribbons { position: absolute; inset: 0; }
+  .copy { position: absolute; left: 80px; top: 150px; width: 560px; }
+  .eyebrow { font-weight: 700; font-size: 15px; letter-spacing: .16em; color: var(--greenInk); }
+  h1 { margin: 14px 0 18px; font-size: 88px; font-weight: 800; letter-spacing: -.035em; line-height: 1; }
+  h1 span { color: var(--blue); }
+  p { margin: 0; font-size: 23px; line-height: 1.5; color: var(--text); font-weight: 500; }
+  .chips { margin-top: 28px; display: flex; gap: 10px; }
+  .chip { border: 1.5px solid var(--blue); color: var(--blue); background: #FFFFFF; border-radius: 999px; padding: 8px 16px;
+          font-size: 16px; font-weight: 700; white-space: nowrap; }
+
+  .card { position: absolute; left: 700px; top: 104px; width: 500px; background: #FFFFFF; border-radius: 18px;
+          box-shadow: 0 2px 4px rgba(11,42,91,.06), 0 28px 56px rgba(11,42,91,.2); overflow: hidden; }
+  .card .head { background: var(--blue); color: #FFFFFF; padding: 16px 26px; display: flex; justify-content: space-between;
+                font-family: 'DM Mono', monospace; font-size: 14px; letter-spacing: .03em; }
+  .card .body { padding: 8px 26px 22px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: right; font-size: 11px; font-weight: 700; letter-spacing: .12em; color: #7A879C; padding: 12px 0 8px; border-bottom: 1.5px solid var(--navy); }
+  th:first-child, td:first-child { text-align: left; }
+  td { padding: 10px 0; text-align: right; border-bottom: 1px solid var(--rule); font-size: 16px; font-weight: 600; }
+  td.c { color: #7A879C; font-size: 13px; font-weight: 700; letter-spacing: .06em; }
+  td.n { font-family: 'DM Mono', monospace; font-weight: 500; }
+  tr.last td.n { border-bottom: 4px double var(--navy); }
+  .foot { margin-top: 18px; display: flex; justify-content: space-between; align-items: center; }
+  .badge { display: inline-flex; align-items: center; gap: 8px; background: rgba(56,210,0,.14); color: var(--greenInk);
+           border-radius: 999px; padding: 7px 14px 7px 8px; font-size: 14px; font-weight: 700; }
+  .badge i { width: 20px; height: 20px; border-radius: 50%; background: var(--green); color: #FFFFFF; font-style: normal;
+             display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+  .badge small { font-weight: 500; opacity: .8; }
+  .net { font-family: 'DM Mono', monospace; font-size: 15px; color: var(--text); text-align: right; line-height: 1.6; }
+  .net b { color: var(--greenInk); font-weight: 500; }
+</style>
+</head>
+<body>
+  <svg class="ribbons" width="1280" height="640" viewBox="0 0 1280 640">
+    <defs>
+      <linearGradient id="gb" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#1E7FD8"/><stop offset="1" stop-color="#155FAE"/></linearGradient>
+      <linearGradient id="gg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#5CCB7A"/><stop offset="1" stop-color="#38A862"/></linearGradient>
+    </defs>
+    <path d="M560 640 C 760 600, 860 330, 1060 240 S 1280 150, 1300 120 L 1300 640 Z" fill="url(#gg)" opacity=".9"/>
+    <path d="M640 640 C 840 570, 940 430, 1110 360 S 1260 300, 1300 300 L 1300 640 Z" fill="url(#gb)"/>
+  </svg>
+
+  <div class="copy">
+    <div class="eyebrow">JAVA · SPRING BOOT · POSTGRESQL</div>
+    <h1>Dura<span>Ledger</span></h1>
+    <p>A multi-currency wallet ledger that never loses or duplicates money: not under retries, races, crashes or deploys.</p>
+    <div class="chips"><span class="chip">Double-entry</span><span class="chip">Exactly-once</span><span class="chip">Zero-downtime</span></div>
+  </div>
+
+  <div class="card">
+    <div class="head"><span>TXN 8f21a0c4 · FX 20.00 USD → HKD</span><span>@ 7.80</span></div>
+    <div class="body">
+      <table>
+        <tr><th>ACCOUNT</th><th></th><th>DEBIT</th><th>CREDIT</th></tr>
+        <tr><td>Din · wallet</td><td class="c">USD</td><td class="n">20.00</td><td class="n"></td></tr>
+        <tr><td>FX pool</td><td class="c">USD</td><td class="n"></td><td class="n">20.00</td></tr>
+        <tr><td>FX pool</td><td class="c">HKD</td><td class="n">156.00</td><td class="n"></td></tr>
+        <tr class="last"><td>Din · wallet</td><td class="c">HKD</td><td class="n"></td><td class="n">156.00</td></tr>
+      </table>
+      <div class="foot">
+        <span class="badge"><i>✓</i>Balanced <small>· per currency, at commit</small></span>
+        <span class="net">net USD <b>0.00</b><br>net HKD <b>0.00</b></span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

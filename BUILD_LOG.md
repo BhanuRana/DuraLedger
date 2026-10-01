@@ -202,3 +202,11 @@ Nine alerts live in `observability/` as Prometheus rules (one file for the alert
 3. **A database outage paged as a Pub/Sub failure.** With Pub/Sub healthy and Postgres stopped, `OutboxPublishFailing` fired after 21 s: relay ticks fail when they can't read the outbox too, and one counter couldn't tell the causes apart. Failures are now tagged `cause=pubsub` or `cause=database` and the alert counts only Pub/Sub. Live: a database outage counted 22 database and 0 Pub/Sub failures with the alert inactive, and pausing Pub/Sub fired it in 41 s.
 
 After the fixes all nine alerts reached FIRING against the running stack. CI now also runs the rule tests and fails if the committed dashboard JSON drifts from its generator.
+
+## 2026-10-02: continuous delivery, ready for GCP
+
+The workflow now has a deploy job after both test jobs: on `main` it authenticates to GCP through Workload Identity Federation, so no service-account key exists anywhere, and the provider (`infra/gcp/setup-ci.sh`) accepts only tokens minted for this repository's `main` branch. The deployer account gets exactly the roles `deploy.sh` needs, plus `actAs` on each runtime account individually, so it can't run anything as, say, the Compute default account. The job runs the same `deploy.sh` as a manual deploy (build, push, migrate as Cloud Run Jobs, deploy) and smoke-tests both services' health. It stays skipped until the two repository variables exist, so CI is green without a cloud project.
+
+Production metrics go to Grafana Cloud once its token is in Secret Manager (`scripts/store-grafana-secret.sh` stores it as the ready-made `Authorization` header, because `--set-secrets` can only inject a value verbatim); until then export stays off.
+
+The README is now the full write-up: what's proven and how, the money-movement postings, the measured numbers, and every bug above with its evidence.
