@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -85,7 +84,7 @@ public class OutboxRelay {
      * proxy borrows a connection before the body runs, so a tick during shutdown failed on the closed
      * pool before it could see the flag. Hence a TransactionTemplate instead of the annotation.
      */
-    @Scheduled(fixedDelayString = "${duraledger.outbox.poll-interval:200ms}")
+    /** Called by the internal scheduler (local) or the {@code /internal/tasks/outbox-sweep} endpoint (Cloud Run). */
     public int publishPending() {
         if (!running) {
             return 0;
@@ -99,6 +98,19 @@ public class OutboxRelay {
             log.warn("Outbox publish failed, will retry: {}", e.toString());
             return 0;
         }
+    }
+
+    /** Publishes batches until the outbox is empty or {@code maxBatches} is reached. */
+    public int drain(int maxBatches) {
+        int total = 0;
+        for (int i = 0; i < maxBatches; i++) {
+            int published = publishPending();
+            total += published;
+            if (published < properties.batchSize()) {
+                break;
+            }
+        }
+        return total;
     }
 
     private int publishBatch() {
