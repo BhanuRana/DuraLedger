@@ -5,7 +5,8 @@ A multi-currency wallet ledger built with Java 21, Spring Boot, jOOQ, PostgreSQL
 ## What it does
 
 - **Accounts:** one wallet per user per currency (HKD, USD, EUR, GBP).
-- **Deposits and transfers,** each posted as legs that must net to zero per currency. Deposits post against a per-currency clearing account, so money entering the ledger is double-entry too.
+- **Deposits, withdrawals and transfers,** each posted as legs that must net to zero per currency. Deposits and withdrawals post against a per-currency clearing account, so money entering or leaving the ledger is double-entry too.
+- **FX conversion** between a user's wallets, as four legs through per-currency FX pool accounts, so each currency still nets to zero on its own. Amounts are `BigDecimal` and round down (the house keeps the sub-cent remainder), and each conversion stores the rate it used.
 - **Idempotency:** every money-moving request needs an `Idempotency-Key`. A retry with the same key replays the original response (`Idempotent-Replayed: true`) and never moves money twice, even when duplicates arrive at the same instant. Refusals are replayed too, so a key never flips from "declined" to "done". A key reused for a different request is rejected.
 - **Concurrency:** transfers from the same account are serialized, so an account can't be overdrawn. Accounts are locked in id order, so transfers in opposite directions can't deadlock.
 - **Stored balances:** each wallet's balance is kept on the account row, updated in the same transaction as its ledger entries, so reading it is O(1) whatever the history. The ledger entries remain the source of truth.
@@ -13,18 +14,23 @@ A multi-currency wallet ledger built with Java 21, Spring Boot, jOOQ, PostgreSQL
 - **Activity feed:** `notification-service` builds each wallet's feed from those events alone, with its own schema. It applies a redelivered event once and skips event types it doesn't know.
 - **Reconciliation:** every 60 seconds, in one consistent snapshot, the ledger checks itself: every currency nets to zero across all entries, and every stored balance equals the sum of its entries. Violations are exported as metrics and logged as errors; `POST /actuator/reconciliation` runs one on demand.
 - **Two run modes, one image:** locally the relay, reconciliation and the event consumer run on background threads. Under the `gcp` profile (Cloud Run, scaling to zero) they become requests instead: Cloud Scheduler calls `POST /internal/tasks/*`, events publish right after commit, and Pub/Sub pushes them to notification-service. Those endpoints accept only a Google-signed OIDC token from an allow-listed service account.
+- **API key and rate limit:** every business endpoint needs `X-Api-Key` (constant-time check, several keys for rotation, refuses everything when none is configured); each key gets a per-minute limit, with 429 and `Retry-After` beyond it.
 - **Errors** are RFC 9457 `application/problem+json` with stable types, e.g. `urn:duraledger:problem:insufficient-funds`.
 
 Postgres enforces the ledger invariants itself: zero-sum per currency at commit, append-only entries, an entry's currency matching its account's, and no negative balance.
 
 ## API
 
+Every endpoint below needs `X-Api-Key` (locally: `local-dev-key`).
+
 | Endpoint | |
 |---|---|
 | `POST /accounts` | Create a wallet |
 | `GET /accounts/{id}` · `GET /accounts/{id}/balance` | Read a wallet and its balance |
 | `POST /deposits` | Money in (needs `Idempotency-Key`) |
+| `POST /withdrawals` | Money out (needs `Idempotency-Key`) |
 | `POST /transfers` | Same-currency transfer (needs `Idempotency-Key`) |
+| `POST /fx-convert` | Convert into the same user's wallet in another currency (needs `Idempotency-Key`) |
 | `GET /transactions/{id}` | A transaction and its ledger legs |
 | `GET /accounts/{id}/activity` | The wallet's activity feed (notification-service, port 8081) |
 
@@ -54,12 +60,13 @@ Everything runs against a real Postgres and the real Pub/Sub emulator through Te
 | Suite | What it proves |
 |---|---|
 | `LedgerSchemaSpec` (Spock) | Each database invariant, by trying to break it in SQL |
-| `MoneyMovementApiTests` | Transfers, deposits, idempotency and the concurrency cases over real HTTP: 20 identical requests → 1 transaction; 20 transfers draining one account → exactly the affordable 10 succeed; opposite transfers don't deadlock |
+| `MoneyMovementApiTests` | Deposits, withdrawals, transfers, FX, idempotency and the concurrency cases over real HTTP: 20 identical requests → 1 transaction; 20 debits draining one account → exactly the affordable 10 succeed; opposite transfers don't deadlock; FX posts 4 legs and rounds down |
 | `OptimisticMoneyMovementApiTests` | The same suite under optimistic locking |
 | `AccountApiTests` | Wallet creation, lookup and error types |
 | `ReconciliationTests` | Deliberate corruption is caught with exact amounts, including a one-sided entry written with the database triggers disabled |
 | `OutboxRelayTests` | A committed deposit reaches Pub/Sub (the emulator) and is marked published |
 | `CloudRunModeTests` | With no scheduler at all, an event still arrives (publish-after-commit), the sweep publishes a missed row, and task endpoints refuse callers without a valid token |
+| `ApiKeyTests`, `FixedWindowRateLimiterTests` | Missing and wrong keys get 401 before any database work, either of two keys works, the limit answers 429 with `Retry-After` |
 | `GoogleOidcInvokerVerifierTests` | Missing, malformed and unsigned (`alg=none`) tokens are refused |
 | `ActivityFeedTests` (notification-service) | Both sides of a transfer in the right feeds, a redelivered event applied once, unknown event types skipped, newest first |
 | `PushDeliveryTests` (notification-service) | Pushed events land in both feeds and are acked with 204, a redelivered push is applied once, unauthenticated pushes get 403 |
