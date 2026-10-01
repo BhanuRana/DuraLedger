@@ -32,15 +32,24 @@ migrate() { # name image [extra env]
 migrate ledger-migrate ledger-migrations
 migrate notification-migrate notification-migrations "FLYWAY_SCHEMAS=notification,FLYWAY_DEFAULT_SCHEMA=notification"
 
+# Metrics go to Grafana Cloud once its token is stored (scripts/store-grafana-secret.sh); until then
+# the services run with export off. GRAFANA_OTLP_ENDPOINT is the stack's OTLP URL (not a secret).
+OTLP_ENV=""; OTLP_SECRET=""
+if exists gcloud secrets describe grafana-otlp-authorization --project="$PROJECT"; then
+  : "${GRAFANA_OTLP_ENDPOINT:?set GRAFANA_OTLP_ENDPOINT, e.g. https://otlp-gateway-prod-ap-southeast-1.grafana.net/otlp}"
+  OTLP_ENV=",DURALEDGER_ENV=gcp,MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED=true,MANAGEMENT_OTLP_METRICS_EXPORT_URL=$GRAFANA_OTLP_ENDPOINT/v1/metrics"
+  OTLP_SECRET=",MANAGEMENT_OTLP_METRICS_EXPORT_HEADERS_AUTHORIZATION=grafana-otlp-authorization:latest"
+fi
+
 step "Deploy services (scale to zero; max 2 instances caps cost and Neon connections)"
-APP_SECRETS="SPRING_DATASOURCE_URL=db-url:latest,SPRING_DATASOURCE_USERNAME=db-username:latest,SPRING_DATASOURCE_PASSWORD=db-password:latest,DURALEDGER_API_KEYS=api-key:latest"
+APP_SECRETS="SPRING_DATASOURCE_URL=db-url:latest,SPRING_DATASOURCE_USERNAME=db-username:latest,SPRING_DATASOURCE_PASSWORD=db-password:latest,DURALEDGER_API_KEYS=api-key:latest$OTLP_SECRET"
 COMMON=(--region="$REGION" --project="$PROJECT" --allow-unauthenticated --min-instances=0 --max-instances=2
         --cpu=1 --memory=1Gi --cpu-boost --timeout=60s --set-secrets="$APP_SECRETS" --quiet)
 gcloud run deploy ledger-service --image="$REGISTRY/ledger-service:$TAG" --service-account="$(sa ledger-svc)" "${COMMON[@]}" \
-  --set-env-vars="SPRING_PROFILES_ACTIVE=gcp,DURALEDGER_TASKS_AUDIENCE=$LEDGER_URL,DURALEDGER_TASKS_ALLOWED_INVOKERS=$(sa scheduler-invoker)" >/dev/null
+  --set-env-vars="SPRING_PROFILES_ACTIVE=gcp,DURALEDGER_TASKS_AUDIENCE=$LEDGER_URL,DURALEDGER_TASKS_ALLOWED_INVOKERS=$(sa scheduler-invoker)$OTLP_ENV" >/dev/null
 echo "ledger-service       -> $LEDGER_URL"
 gcloud run deploy notification-service --image="$REGISTRY/notification-service:$TAG" --service-account="$(sa notification-svc)" "${COMMON[@]}" \
-  --set-env-vars="SPRING_PROFILES_ACTIVE=gcp,DURALEDGER_EVENTS_PUSH_AUDIENCE=$NOTIFY_URL,DURALEDGER_EVENTS_PUSH_INVOKERS=$(sa pubsub-pusher)" >/dev/null
+  --set-env-vars="SPRING_PROFILES_ACTIVE=gcp,DURALEDGER_EVENTS_PUSH_AUDIENCE=$NOTIFY_URL,DURALEDGER_EVENTS_PUSH_INVOKERS=$(sa pubsub-pusher)$OTLP_ENV" >/dev/null
 echo "notification-service -> $NOTIFY_URL"
 
 step "Push subscription: Pub/Sub -> notification-service (OIDC-signed, retries with backoff, DLQ after 10)"

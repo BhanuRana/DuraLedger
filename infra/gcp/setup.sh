@@ -41,6 +41,14 @@ for name in ledger-svc notification-svc; do
     --member="serviceAccount:$(sa $name)" --role=roles/secretmanager.secretAccessor >/dev/null
 done
 
+step "Grafana Cloud token, if stored: readable by the runtimes"
+if exists gcloud secrets describe grafana-otlp-authorization --project=$PROJECT; then
+  for name in ledger-svc notification-svc; do
+    gcloud secrets add-iam-policy-binding grafana-otlp-authorization --project=$PROJECT \
+      --member="serviceAccount:$(sa $name)" --role=roles/secretmanager.secretAccessor >/dev/null
+  done
+fi
+
 step "Pub/Sub topics (+ dead-letter topic for poison messages)"
 for t in $TOPIC $DLQ_TOPIC; do
   exists gcloud pubsub topics describe $t --project=$PROJECT || gcloud pubsub topics create $t --project=$PROJECT
