@@ -85,6 +85,16 @@ Requires JDK 21 and Docker (the build generates jOOQ classes from a real, migrat
 docker compose --profile app up --build              # or: both services as containers
 ```
 
+### On Kubernetes (local kind cluster)
+
+```bash
+./k8s/up.sh                 # cluster, images, Postgres, Pub/Sub emulator, migration Jobs, then 2 ledger replicas
+LEDGER=http://localhost:18080 NOTIFY=http://localhost:18081 ./scripts/demo.sh
+./k8s/rollout-test.sh       # transfers keep flowing while every ledger pod is replaced: all must be 201
+```
+
+Rolling updates never go below two ready replicas, and a short `preStop` sleep lets traffic drain before a pod shuts down; without it a rollout dropped about 3% of requests (see the build log).
+
 ## Docs
 
 - [`docs/decisions/`](docs/decisions): architecture decision records
