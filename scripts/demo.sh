@@ -4,9 +4,9 @@
 #   (cd notification-service && ./mvnw spring-boot:run)  # :8081
 #   ./scripts/demo.sh
 #
-# Needs curl, jq and uuidgen. Shows: derived balances, an idempotent retry, key reuse refused, an
-# overdraft refused, a concurrent double-submit executing once, the events reaching the second service,
-# and a live reconciliation of the whole ledger.
+# Needs curl, jq and uuidgen. Shows: the API key check, derived balances, an idempotent retry, key
+# reuse refused, an overdraft refused, a concurrent double-submit executing once, a withdrawal, FX
+# through the pools, the events reaching the second service, and a live reconciliation of the ledger.
 set -euo pipefail
 
 LEDGER=${LEDGER:-http://localhost:8080}
@@ -21,11 +21,14 @@ balance() { json "$LEDGER/accounts/$1/balance" | jq -r '.balanceMinor'; }
 step "0. No API key: refused before any database work"
 curl -s -o /dev/null -w "GET /accounts/... without X-Api-Key -> HTTP %{http_code}\n" "$LEDGER/accounts/$(uuid)"
 
-step "1. Two USD wallets: alice and bob"
-ALICE=$(json -X POST "$LEDGER/accounts" -d "{\"userId\":\"$(uuid)\",\"currency\":\"USD\"}" | jq -r .id)
+step "1. Alice (USD and HKD wallets) and bob (USD)"
+ALICE_USER=$(uuid)
+ALICE=$(json -X POST "$LEDGER/accounts" -d "{\"userId\":\"$ALICE_USER\",\"currency\":\"USD\"}" | jq -r .id)
+ALICE_HKD=$(json -X POST "$LEDGER/accounts" -d "{\"userId\":\"$ALICE_USER\",\"currency\":\"HKD\"}" | jq -r .id)
 BOB=$(json -X POST "$LEDGER/accounts" -d "{\"userId\":\"$(uuid)\",\"currency\":\"USD\"}" | jq -r .id)
-echo "alice=$ALICE"
-echo "bob  =$BOB"
+echo "alice USD=$ALICE"
+echo "alice HKD=$ALICE_HKD"
+echo "bob   USD=$BOB"
 
 step "2. Deposit 100.00 USD to alice (posted against the USD external-clearing account)"
 json -X POST "$LEDGER/deposits" -H "Idempotency-Key: $(uuid)" \
@@ -61,17 +64,30 @@ wait
 echo "^ one distinct transactionId: executed exactly once"
 echo "alice balance: $(balance "$ALICE") (expected 6500)"
 
-step "8. The same movements, as seen by notification-service (fed only by ledger.events via Pub/Sub)"
+step "8. Withdraw 5.00 USD (debit alice, credit the USD external-clearing account)"
+json -X POST "$LEDGER/withdrawals" -H "Idempotency-Key: $(uuid)" \
+  -d "{\"accountId\":\"$ALICE\",\"amountMinor\":500,\"currency\":\"USD\"}" | jq -c '{type, amountMinor, currency}'
+echo "alice balance: $(balance "$ALICE") (expected 6000)"
+
+step "9. FX: convert 20.00 USD to HKD (four legs through the USD and HKD FX pools; the rate is recorded)"
+FX=$(json -X POST "$LEDGER/fx-convert" -H "Idempotency-Key: $(uuid)" \
+  -d "{\"fromAccountId\":\"$ALICE\",\"toCurrency\":\"HKD\",\"amountMinor\":2000}")
+echo "$FX" | jq -c '{fromAmountMinor, fromCurrency, toAmountMinor, toCurrency, rate}'
+json "$LEDGER/transactions/$(echo "$FX" | jq -r .transactionId)" | jq -r '.entries[] | "  \(.direction)\t\(.amountMinor)\t\(.currency)\t\(.accountId)"'
+echo "alice USD: $(balance "$ALICE") (expected 4000)   alice HKD: $(balance "$ALICE_HKD") (expected 15600)"
+
+step "10. The same movements, as seen by notification-service (fed only by ledger.events via Pub/Sub)"
 for _ in $(seq 30); do
-  [ "$(json "$NOTIFY/accounts/$ALICE/activity" | jq length)" -ge 3 ] && break
+  [ "$(json "$NOTIFY/accounts/$ALICE/activity" | jq length)" -ge 5 ] && break
   sleep 0.5
 done
-echo "alice:"; json "$NOTIFY/accounts/$ALICE/activity" | jq -r '.[] | "  \(.direction)\t\(.amountMinor) \(.currency)\t\(.type)"'
-echo "bob:";   json "$NOTIFY/accounts/$BOB/activity"   | jq -r '.[] | "  \(.direction)\t\(.amountMinor) \(.currency)\t\(.type)"'
+echo "alice USD:"; json "$NOTIFY/accounts/$ALICE/activity" | jq -r '.[] | "  \(.direction)\t\(.amountMinor) \(.currency)\t\(.type)"'
+echo "alice HKD:"; json "$NOTIFY/accounts/$ALICE_HKD/activity" | jq -r '.[] | "  \(.direction)\t\(.amountMinor) \(.currency)\t\(.type)"'
+echo "bob USD:";   json "$NOTIFY/accounts/$BOB/activity"   | jq -r '.[] | "  \(.direction)\t\(.amountMinor) \(.currency)\t\(.type)"'
 
-step "9. Outbox relay health"
+step "11. Outbox relay health"
 curl -s "$LEDGER/actuator/prometheus" | grep -E '^duraledger_outbox_(pending|oldest)'
 
-step "10. Reconciliation: the whole ledger nets to zero per currency, and every stored balance matches its entries"
+step "12. Reconciliation: the whole ledger nets to zero per currency, and every stored balance matches its entries"
 curl -s -X POST "$LEDGER/actuator/reconciliation" | jq -c '{entriesChecked, currencyImbalances, balanceMismatches, duration}'
 curl -s "$LEDGER/actuator/prometheus" | grep -E '^duraledger_reconciliation_violations'
