@@ -41,7 +41,7 @@ class OutboxRelayTests {
 
     @BeforeEach
     void setUp() {
-        http = RestClient.builder().baseUrl("http://localhost:" + port).build();
+        http = RestClient.builder().defaultHeader("X-Api-Key", "local-dev-key").baseUrl("http://localhost:" + port).build();
         await().until(() -> admin.getTopic(properties.topic()) != null); // created on ApplicationReady
         subscription = "relay-test-" + UUID.randomUUID();
         admin.createSubscription(subscription, properties.topic()); // sees only messages published from now on

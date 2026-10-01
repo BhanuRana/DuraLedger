@@ -39,7 +39,7 @@ class ActivityFeedTests {
 
     @BeforeEach
     void setUp() {
-        http = RestClient.builder().baseUrl("http://localhost:" + port).build();
+        http = RestClient.builder().defaultHeader("X-Api-Key", "local-dev-key").baseUrl("http://localhost:" + port).build();
     }
 
 

@@ -33,7 +33,7 @@ migrate ledger-migrate ledger-migrations
 migrate notification-migrate notification-migrations "FLYWAY_SCHEMAS=notification,FLYWAY_DEFAULT_SCHEMA=notification"
 
 step "Deploy services (scale to zero; max 2 instances caps cost and Neon connections)"
-APP_SECRETS="SPRING_DATASOURCE_URL=db-url:latest,SPRING_DATASOURCE_USERNAME=db-username:latest,SPRING_DATASOURCE_PASSWORD=db-password:latest"
+APP_SECRETS="SPRING_DATASOURCE_URL=db-url:latest,SPRING_DATASOURCE_USERNAME=db-username:latest,SPRING_DATASOURCE_PASSWORD=db-password:latest,DURALEDGER_API_KEYS=api-key:latest"
 COMMON=(--region="$REGION" --project="$PROJECT" --allow-unauthenticated --min-instances=0 --max-instances=2
         --cpu=1 --memory=1Gi --cpu-boost --timeout=60s --set-secrets="$APP_SECRETS" --quiet)
 gcloud run deploy ledger-service --image="$REGISTRY/ledger-service:$TAG" --service-account="$(sa ledger-svc)" "${COMMON[@]}" \
@@ -71,4 +71,4 @@ schedule outbox-sweep "0 * * * *"     /internal/tasks/outbox-sweep   # safety ne
 schedule reconcile    "30 */6 * * *"  /internal/tasks/reconcile
 
 echo; echo "deployed $TAG"
-echo "demo: LEDGER=$LEDGER_URL NOTIFY=$NOTIFY_URL ./scripts/demo.sh"
+echo "demo: LEDGER=$LEDGER_URL NOTIFY=$NOTIFY_URL API_KEY=\$(gcloud secrets versions access latest --secret=api-key --project=$PROJECT) ./scripts/demo.sh"

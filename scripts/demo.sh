@@ -11,11 +11,15 @@ set -euo pipefail
 
 LEDGER=${LEDGER:-http://localhost:8080}
 NOTIFY=${NOTIFY:-http://localhost:8081}
+API_KEY=${API_KEY:-local-dev-key}
 
 step() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
-json() { curl -s -H 'Content-Type: application/json' "$@"; }
+json() { curl -s -H 'Content-Type: application/json' -H "X-Api-Key: $API_KEY" "$@"; }
 uuid() { uuidgen | tr 'A-Z' 'a-z'; }
 balance() { json "$LEDGER/accounts/$1/balance" | jq -r '.balanceMinor'; }
+
+step "0. No API key: refused before any database work"
+curl -s -o /dev/null -w "GET /accounts/... without X-Api-Key -> HTTP %{http_code}\n" "$LEDGER/accounts/$(uuid)"
 
 step "1. Two USD wallets: alice and bob"
 ALICE=$(json -X POST "$LEDGER/accounts" -d "{\"userId\":\"$(uuid)\",\"currency\":\"USD\"}" | jq -r .id)
@@ -35,7 +39,7 @@ echo "transaction $TX, as two ledger legs:"
 json "$LEDGER/transactions/$TX" | jq -r '.entries[] | "  \(.direction)\t\(.amountMinor)\t\(.currency)\t\(.accountId)"'
 
 step "4. The client retries the SAME request (e.g. after a timeout): original response replayed, no second debit"
-curl -s -D - -o /dev/null -H 'Content-Type: application/json' -X POST "$LEDGER/transfers" \
+curl -s -D - -o /dev/null -H 'Content-Type: application/json' -H "X-Api-Key: $API_KEY" -X POST "$LEDGER/transfers" \
   -H "Idempotency-Key: $KEY" -d "$TRANSFER" | grep -iE '^(HTTP|idempotent-replayed)'
 echo "alice balance: $(balance "$ALICE") (expected 7500)"
 

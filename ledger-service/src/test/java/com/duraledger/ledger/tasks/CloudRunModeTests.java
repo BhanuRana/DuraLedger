@@ -65,7 +65,7 @@ class CloudRunModeTests {
 
     @BeforeEach
     void setUp() {
-        http = RestClient.builder().baseUrl("http://localhost:" + port)
+        http = RestClient.builder().defaultHeader("X-Api-Key", "local-dev-key").baseUrl("http://localhost:" + port)
                 .defaultStatusHandler(s -> true, (req, res) -> { }).build();
         await().until(() -> admin.getTopic(properties.topic()) != null);
         subscription = "cloudrun-test-" + UUID.randomUUID();

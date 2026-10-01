@@ -58,7 +58,7 @@ abstract class LockingBenchmark {
 
     @Test
     void benchmark() throws Exception {
-        http = RestClient.builder()
+        http = RestClient.builder().defaultHeader("X-Api-Key", "local-dev-key")
                 .requestFactory(new JdkClientHttpRequestFactory())
                 .baseUrl("http://localhost:" + port)
                 .defaultStatusHandler(status -> true, (request, response) -> { })

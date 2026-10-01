@@ -44,7 +44,7 @@ class ReconciliationTests {
 
     @BeforeEach
     void realTraffic() {
-        http = RestClient.builder().baseUrl("http://localhost:" + port).build();
+        http = RestClient.builder().defaultHeader("X-Api-Key", "local-dev-key").baseUrl("http://localhost:" + port).build();
         alice = account();
         bob = account();
         post("/deposits", Map.of("accountId", alice, "amountMinor", 10_000, "currency", "USD"));

@@ -38,7 +38,7 @@ class MoneyMovementApiTests {
 
     @BeforeEach
     void setUp() {
-        http = RestClient.builder()
+        http = RestClient.builder().defaultHeader("X-Api-Key", "local-dev-key")
                 .baseUrl("http://localhost:" + port)
                 .defaultStatusHandler(status -> true, (request, response) -> { }) // assert on 4xx, don't throw
                 .build();

@@ -32,6 +32,15 @@ for secret in db-url db-username db-password; do
   done
 done
 
+step "API key: generated once, random, never printed (read it with: gcloud secrets versions access latest --secret=api-key)"
+exists gcloud secrets describe api-key --project=$PROJECT ||
+  openssl rand -base64 33 | tr -d '\n/+=' | gcloud secrets create api-key --project=$PROJECT \
+    --replication-policy=automatic --data-file=- >/dev/null
+for name in ledger-svc notification-svc; do
+  gcloud secrets add-iam-policy-binding api-key --project=$PROJECT \
+    --member="serviceAccount:$(sa $name)" --role=roles/secretmanager.secretAccessor >/dev/null
+done
+
 step "Pub/Sub topics (+ dead-letter topic for poison messages)"
 for t in $TOPIC $DLQ_TOPIC; do
   exists gcloud pubsub topics describe $t --project=$PROJECT || gcloud pubsub topics create $t --project=$PROJECT
