@@ -1,9 +1,18 @@
+# Test everything on every change; deploy to Cloud Run from main once GCP is connected.
+# Deploy auth is Workload Identity Federation (infra/gcp/setup-ci.sh): no service-account key exists
+# anywhere, and GCP accepts tokens only from this repo's main branch.
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# A newer push to main waits for an in-flight deploy instead of racing it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -49,3 +58,36 @@ jobs:
         run: |
           python3 observability/grafana/build_dashboard.py
           git diff --exit-code -- observability/grafana/dashboards
+
+  deploy:
+    # Runs only once setup-ci.sh has been run and its two values saved as repository variables.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+    needs: [test, observability]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # to mint the OIDC token that Workload Identity Federation exchanges
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: "*/pom.xml"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: docker/setup-buildx-action@v3
+      # The same script as a manual deploy: build, push, migrate (Cloud Run Jobs), deploy.
+      - run: ./infra/gcp/deploy.sh
+      - name: Smoke test the live services
+        run: |
+          source infra/gcp/config.sh
+          for s in ledger-service notification-service; do
+            curl -sf --retry 5 --retry-delay 3 --retry-all-errors "$(url $s)/actuator/health" | grep -q '"UP"'
+            echo "$s UP"
+          done
