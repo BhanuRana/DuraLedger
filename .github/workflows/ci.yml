@@ -20,8 +20,8 @@ jobs:
       run:
         working-directory: ${{ matrix.service }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
@@ -34,3 +34,18 @@ jobs:
         with:
           name: surefire-reports-${{ matrix.service }}
           path: ${{ matrix.service }}/target/surefire-reports
+
+  observability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Alert rules parse, and their unit tests pass
+        run: |
+          promtool() { docker run --rm -v "$PWD/observability/prometheus:/p" -w "/p/$1" --entrypoint promtool prom/prometheus:v3.14.0 "${@:2}"; }
+          promtool . check config prometheus.yaml
+          promtool rules check rules gcp.yaml
+          promtool rules test rules alerts.test.yaml
+      - name: Committed dashboard JSON matches its generator
+        run: |
+          python3 observability/grafana/build_dashboard.py
+          git diff --exit-code -- observability/grafana/dashboards

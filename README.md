@@ -95,6 +95,10 @@ LEDGER=http://localhost:18080 NOTIFY=http://localhost:18081 ./scripts/demo.sh
 
 Rolling updates never go below two ready replicas, and a short `preStop` sleep lets traffic drain before a pod shuts down; without it a rollout dropped about 3% of requests (see the build log).
 
+## Observability
+
+Both services push metrics over OTLP (a scaled-to-zero service has nothing to scrape). `docker compose --profile app up` includes a local Grafana (`:3000`, dashboard `/d/duraledger`) and Prometheus (`:9090`). Nine alert rules and the dashboard are code in [`observability/`](observability): every rule has `promtool` unit tests, and `./observability/prove-alerts.sh` breaks the running stack once per alert and waits for each to fire.
+
 ## Docs
 
 - [`docs/decisions/`](docs/decisions): architecture decision records
