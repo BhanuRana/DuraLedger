@@ -40,5 +40,6 @@ docker run --rm -v "$PWD/observability/prometheus/rules:/r" -w /r --entrypoint p
 
 - **Timers arrive in milliseconds.** The OTLP registry's base unit is ms, and Prometheus appends the unit: `http_server_requests_milliseconds_bucket`, not `_seconds_`.
 - **Latency SLO without `histogram_quantile`.** There are only 6 SLO buckets (to stay inside the free tier's series budget), so a p99 would be an interpolated guess. "Share of requests over 1 s" reads the `le="1000"` bucket directly and is exact.
+- **Counters can be born non-zero.** An instance counts from process start but first pushes up to 30 s later. `increase()` only sees change *between* samples, so a Cloud Run instance that cold-starts, handles a burst and scales away can report its whole burst as zero. The "did X happen" alerts add the birth value of series that didn't exist 10 minutes earlier. Found when the live proof didn't fire.
 - **Everything aggregates `by (job)`.** Every process pushes its own series (`service.instance.id`), and every cold start is a new instance.
 - **Scale-to-zero means no data is normal.** Gauges are read with `last_over_time` over the schedule window, and `ReconciliationStale` in production treats *no data at all* as stale.

@@ -229,3 +229,35 @@ tests:
               summary: "1 transfer(s) exhausted optimistic retries in 10m"
               description: "Contention on hot accounts is beyond what optimistic retry absorbs; consider pessimistic locking."
 
+
+  # A cold-started instance counts before its first push, so its series is born non-zero. increase()
+  # only sees change between samples and reads 0 here: the alert must count a new series from zero.
+  - interval: 30s
+    input_series:
+      - series: 'duraledger_transfers_optimistic_exhausted_total{job="ledger-service", instance="old"}'
+        values: '0+0x40'
+      - series: 'duraledger_transfers_optimistic_exhausted_total{job="ledger-service", instance="cold"}'
+        values: '_x20 17+0x20'
+      - series: 'duraledger_outbox_publish_failures_total{job="ledger-service", instance="cold"}'
+        values: '_x20 5+0x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: TransferRetriesExhausted
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: TransferRetriesExhausted
+        exp_alerts:
+          - exp_labels: { severity: warning, job: ledger-service }
+            exp_annotations:
+              summary: "17 transfer(s) exhausted optimistic retries in 10m"
+              description: "Contention on hot accounts is beyond what optimistic retry absorbs; consider pessimistic locking."
+      - eval_time: 11m
+        alertname: OutboxPublishFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, job: ledger-service }
+            exp_annotations:
+              summary: "5 outbox publish failure(s) in the last 10m"
+              description: "Pub/Sub unreachable or permission problem. Events are safe in the outbox and will be retried."
+      - eval_time: 20m # the new series is now older than the window and hasn't moved: resolved
+        alertname: TransferRetriesExhausted
+        exp_alerts: []

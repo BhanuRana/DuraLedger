@@ -6,6 +6,12 @@
 # timers are in MILLISECONDS (the OTLP registry's base unit), hence http_server_requests_milliseconds_*.
 # Every expression aggregates `by (job)`: each process pushes its own series (service.instance.id), and
 # on Cloud Run every cold start is a new instance, so per-instance alerts would be noise.
+#
+# "Did X happen at all in 10m" alerts add a second term to increase(). An instance counts from process
+# start but first pushes up to 30 s later, so a series can be born non-zero, and increase() only sees
+# change between samples, so it misses everything before the first push. On Cloud Run (cold start,
+# burst, scale to zero) that can be all of it. min_over_time(x[10m]) unless x offset 10m is the birth
+# value of series that didn't exist 10m ago. Found when the live proof didn't fire.
 groups:
   - name: duraledger-correctness
     rules:
@@ -28,7 +34,12 @@ groups:
       # Optimistic locking gave up after max-optimistic-attempts: the client got a 409 for a transfer
       # that was valid. Only possible with duraledger.transfer.locking=optimistic.
       - alert: TransferRetriesExhausted
-        expr: sum by (job) (increase(duraledger_transfers_optimistic_exhausted_total[10m])) > 0
+        expr: |
+          (
+            sum by (job) (increase(duraledger_transfers_optimistic_exhausted_total[10m]))
+            +
+            (sum by (job) (min_over_time(duraledger_transfers_optimistic_exhausted_total[10m]) unless duraledger_transfers_optimistic_exhausted_total offset 10m) or 0 * sum by (job) (duraledger_transfers_optimistic_exhausted_total))
+          ) > 0
         labels:
           severity: warning
         annotations:
@@ -99,7 +110,12 @@ groups:
       # A publish to Pub/Sub failed. Nothing is lost - the row stays in the outbox and is retried - but
       # the activity feed falls behind until it succeeds. How far behind is the env-specific backlog alert.
       - alert: OutboxPublishFailing
-        expr: sum by (job) (increase(duraledger_outbox_publish_failures_total[10m])) > 0
+        expr: |
+          (
+            sum by (job) (increase(duraledger_outbox_publish_failures_total[10m]))
+            +
+            (sum by (job) (min_over_time(duraledger_outbox_publish_failures_total[10m]) unless duraledger_outbox_publish_failures_total offset 10m) or 0 * sum by (job) (duraledger_outbox_publish_failures_total))
+          ) > 0
         labels:
           severity: warning
         annotations:
