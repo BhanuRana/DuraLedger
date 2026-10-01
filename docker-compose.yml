@@ -3,13 +3,16 @@
 # `docker compose --profile app up --build` also runs both services from their images (build the jars first).
 services:
   postgres:
-    image: postgres:16-alpine
+    # 18 = what production (Neon) runs; tests and jOOQ codegen pin the same version.
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: duraledger
       POSTGRES_USER: duraledger
       POSTGRES_PASSWORD: local-only-password
     ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+    # The 18 image keeps data in a versioned subdirectory, so mount the parent. A new volume, because an
+    # 18 server can't open a 16 data directory.
+    volumes: ["postgres18-data:/var/lib/postgresql"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U duraledger -d duraledger"]
       interval: 2s
@@ -49,4 +52,4 @@ services:
       pubsub: { condition: service_started }
 
 volumes:
-  pgdata:
+  postgres18-data:

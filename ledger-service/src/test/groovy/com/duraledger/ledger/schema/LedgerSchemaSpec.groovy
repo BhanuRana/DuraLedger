@@ -16,7 +16,7 @@ import java.sql.SQLException
  */
 class LedgerSchemaSpec extends Specification {
 
-    @Shared PostgreSQLContainer postgres = new PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"))
+    @Shared PostgreSQLContainer postgres = new PostgreSQLContainer(DockerImageName.parse("postgres:18-alpine"))
     @Shared Sql sql
 
     def setupSpec() {

@@ -148,3 +148,9 @@ The tests corrupt the ledger on purpose. A balance edited by +1 is reported as `
 **Two more shutdown problems**, surfaced because this test class uses `@DirtiesContext` and closes a context mid-run:
 1. 8 × `HikariDataSource has been closed`, thrown inside the relay's *proxy*. The `running` check sat inside a `@Transactional` method, and the proxy borrows a connection before the method body runs. The check now comes first, and a `TransactionTemplate` opens the transaction after it. 8 → 0.
 2. A publish timeout, handled correctly, still surfaced as an ERROR stack trace; during a Pub/Sub outage that's 5 per second. Now one WARN plus a `duraledger.outbox.publish.failures` counter.
+
+## 2026-10-02: images, and the database version production actually runs
+
+Both services now ship as layered, non-root images (`MaxRAMPercentage=75`: a 576 MiB heap under a 768 MiB limit; the application layer is 135 kB) and run from them with `docker compose --profile app up --build`. The demo passes against the containers. The deployment design is [ADR 0006](docs/decisions/0006-cloud-run-neon-scale-to-zero.md): Cloud Run and Neon, scaling to zero.
+
+**Version drift.** The production database, a Neon project, runs **PostgreSQL 18.6**: that's what Flyway reported when it migrated it. Every test here ran on 16, so production would have run a version no test had touched. Compose, both services' test containers, the schema spec and jOOQ codegen all move to `postgres:18-alpine`, and codegen regenerated from 18. The 18 image keeps data in a versioned subdirectory and can't open a 16 data directory, so compose mounts a new volume at `/var/lib/postgresql`. All 62 tests pass on 18.6. Lesson: pin the test database to production's version, and read the version production reports rather than assuming it.

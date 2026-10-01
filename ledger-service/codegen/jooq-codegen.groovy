@@ -1,5 +1,5 @@
-// Generates jOOQ classes from the *real* schema: throwaway Postgres container -> Flyway migrations ->
-// jOOQ codegen over JDBC. Run by gmavenplus in the generate-sources phase (see pom.xml).
+// Generates jOOQ classes from the *real* schema: throwaway Postgres 18 container (what production runs)
+// -> Flyway migrations -> jOOQ codegen over JDBC. Run by gmavenplus in generate-sources (see pom.xml).
 //
 // Why not jOOQ's DDLDatabase? It replays the SQL on an embedded H2, which can't parse PL/pgSQL
 // functions or partial indexes, so the generated code would drift from the real schema.
@@ -24,7 +24,7 @@ if (!Boolean.getBoolean("jooq.codegen.force") && stamp.exists() && stamp.lastMod
     return
 }
 
-def postgres = new PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"))
+def postgres = new PostgreSQLContainer(DockerImageName.parse("postgres:18-alpine"))
 postgres.start()
 try {
     Flyway.configure()
