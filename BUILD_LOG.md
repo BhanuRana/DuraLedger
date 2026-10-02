@@ -210,3 +210,9 @@ The workflow now has a deploy job after both test jobs: on `main` it authenticat
 Production metrics go to Grafana Cloud once its token is in Secret Manager (`scripts/store-grafana-secret.sh` stores it as the ready-made `Authorization` header, because `--set-secrets` can only inject a value verbatim); until then export stays off.
 
 The README is now the full write-up: what's proven and how, the money-movement postings, the measured numbers, and every bug above with its evidence.
+
+## 2026-10-02: live, deployed by CI
+
+The production database was reset (the earlier private build's schema history didn't match this repo's migrations), then `setup.sh` and `setup-ci.sh` ran and the two repository variables were set. **The first CI deploy failed**, after Workload Identity Federation had worked: `gcloud projects describe` returned SERVICE_DISABLED for the Cloud Resource Manager API. Manual deploys had never hit it, because a user's gcloud login bills such calls to its own quota project; the deployer account runs inside this project. `setup-ci.sh` now enables Cloud Resource Manager, IAM Credentials and STS, and the next push deployed: tests, rule checks, build, Flyway as Cloud Run Jobs, both services, the push subscription, the scheduler jobs, and a smoke test, in under 5 minutes.
+
+**The demo stopped at step 11 against production**: the `gcp` profile exposes only health and info, so there were no metrics to read. When the actuator is closed the demo now shows `/internal/tasks/reconcile` refusing an anonymous caller (403) and has Cloud Scheduler run it with its Google-signed token: `Reconciliation OK: 24 entries checked in 199 ms`. Everything before it passed in production unchanged, including both activity feeds filled by Pub/Sub push.

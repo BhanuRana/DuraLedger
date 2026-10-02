@@ -2,7 +2,7 @@
 
 DuraLedger is a small but correct version of the core primitive behind digital banks and multi-currency wallets: double-entry accounts, idempotent money movement, and event-driven services. Every correctness claim below has a test that tries to break it, and the important ones have a **mutation check**: the protection was removed on purpose to confirm the test then fails.
 
-[Run it locally](#run-it-locally) · [How money moves](#how-money-moves) · [Bugs I'm glad I found](#bugs-im-glad-i-found) · [![CI](https://github.com/BhanuRana/DuraLedger/actions/workflows/ci.yml/badge.svg)](https://github.com/BhanuRana/DuraLedger/actions/workflows/ci.yml)
+**[Try the live API](#try-it)** · [Run it locally](#run-it-locally) · [How money moves](#how-money-moves) · [Bugs I'm glad I found](#bugs-im-glad-i-found) · [![CI](https://github.com/BhanuRana/DuraLedger/actions/workflows/ci.yml/badge.svg)](https://github.com/BhanuRana/DuraLedger/actions/workflows/ci.yml)
 
 ## Proof, not claims
 
@@ -16,7 +16,31 @@ DuraLedger is a small but correct version of the core primitive behind digital b
 | Deploys drop nothing | **0 failed** of 3,386, 3,608 and 3,566 transfers while every ledger pod was replaced (130 of 3,527 failed before the fix) |
 | Events are never lost | Transactional outbox: with Pub/Sub frozen, events wait in Postgres and drain on recovery |
 | Alerts actually fire | 9 alerts, each **unit-tested** and each **made to fire** by breaking the running stack |
-| Built to cost ≈ $0 idle | Scale-to-zero on Cloud Run, serverless Postgres and free tiers, behind a budget alert ([ADR 0006](docs/decisions/0006-cloud-run-neon-scale-to-zero.md)) |
+| Live, and ≈ $0 idle by design | Scale-to-zero on Cloud Run, serverless Postgres and free tiers, behind a budget alert ([ADR 0006](docs/decisions/0006-cloud-run-neon-scale-to-zero.md)) |
+
+## Try it
+
+> **Live** on Cloud Run (Singapore) with Neon Postgres 18 and Pub/Sub, deployed from `main` by CI:
+> - Ledger API: `https://ledger-service-540789990478.asia-southeast1.run.app`
+> - Activity feed: `https://notification-service-540789990478.asia-southeast1.run.app/accounts/{id}/activity`
+> - Every call needs an `X-Api-Key` (available on request). The first request after idle is slower: the services scale to zero.
+
+A transfer, then the same request retried:
+
+```console
+$ curl -si -X POST $LEDGER/transfers \
+    -H "X-Api-Key: $KEY" -H "Idempotency-Key: 5b1e…" -H "Content-Type: application/json" \
+    -d '{"fromAccountId":"a7a1…","toAccountId":"2562…","amountMinor":2500,"currency":"USD"}'
+HTTP/2 201
+{"transactionId":"39830f0e-…","type":"TRANSFER","status":"COMPLETED","amountMinor":2500,"currency":"USD",…}
+
+$ # the same Idempotency-Key again (a client retry after a timeout)
+HTTP/2 201
+idempotent-replayed: true
+{"transactionId":"39830f0e-…", …}          ← same transaction, money moved once
+```
+
+`./scripts/demo.sh` runs the whole story locally or against production: the API key check, retries, a reused key, an overdraft, 10 simultaneous identical requests, a withdrawal, FX, both activity feeds and a reconciliation run by Cloud Scheduler.
 
 ## Repository layout
 
@@ -231,10 +255,11 @@ Each was caught by a test, a benchmark or a deliberate failure, and each is its 
 | A database outage hung every request for 30 s | Making the 5xx alert fire | Fail fast on connection acquisition | 30.03 s → 3.0 s; the alert fires |
 | Counter alerts missed events from new instances | An alert that didn't fire with 17 events behind it | Count the value a new series is born with | Unit test + live proof |
 | A database outage was reported as "Pub/Sub failing" | Live alert proof | Tag relay failures by cause | False alarm in 21 s → none; a Pub/Sub outage still fires |
+| The first CI deploy failed after authenticating | The deploy job itself | Enable the APIs the deployer calls from inside the project | Manual deploys hid it: a user login bills another project |
 
 ## Running in production
 
-**Cloud Run, designed for ≈ $0/month idle** (scripts in [`infra/gcp/`](infra/gcp), reasoning in [ADR 0006](docs/decisions/0006-cloud-run-neon-scale-to-zero.md)):
+**Live on Cloud Run, designed for ≈ $0/month idle** (scripts in [`infra/gcp/`](infra/gcp), reasoning in [ADR 0006](docs/decisions/0006-cloud-run-neon-scale-to-zero.md)):
 
 | Concern | How |
 |---|---|
@@ -284,7 +309,6 @@ open http://localhost:3000/d/duraledger    # dashboard
 ./k8s/up.sh && ./k8s/rollout-test.sh       # same images on kind, zero-downtime rollout under load
 ```
 
-`./scripts/demo.sh` runs the whole story: the API key check, a transfer as two legs, a retried request replayed, a reused key and an overdraft refused, 10 simultaneous identical requests executing once, a withdrawal, an FX conversion, both activity feeds and a live reconciliation.
 
 ## Testing
 
