@@ -60,8 +60,9 @@ jobs:
           git diff --exit-code -- observability/grafana/dashboards
 
   deploy:
-    # Runs only once setup-ci.sh has been run and its two values saved as repository variables.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+    # main only (a push, or Run workflow in the Actions tab), once setup-ci.sh has been run and its two
+    # values saved as repository variables.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
     needs: [test, observability]
     runs-on: ubuntu-latest
     environment: production

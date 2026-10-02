@@ -49,7 +49,7 @@ if exists gcloud secrets describe grafana-otlp-authorization --project=$PROJECT;
   done
 fi
 
-step "Pub/Sub topics (+ dead-letter topic for poison messages)"
+step "Pub/Sub topics, and a dead-letter topic for poison messages"
 for t in $TOPIC $DLQ_TOPIC; do
   exists gcloud pubsub topics describe $t --project=$PROJECT || gcloud pubsub topics create $t --project=$PROJECT
 done
