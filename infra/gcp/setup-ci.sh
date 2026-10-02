@@ -12,6 +12,12 @@ POOL=github; PROVIDER=github-actions
 exists() { "$@" >/dev/null 2>&1; }
 step() { printf '\n== %s\n' "$*"; }
 
+step "APIs the deployer calls from inside this project"
+# A user's gcloud login bills these calls to its own quota project, so a manual deploy worked without
+# them; the deployer account runs in this project, and its first deploy failed with SERVICE_DISABLED.
+gcloud services enable cloudresourcemanager.googleapis.com iamcredentials.googleapis.com sts.googleapis.com \
+  --project=$PROJECT
+
 step "Deployer service account: exactly what infra/gcp/deploy.sh does, nothing more"
 exists gcloud iam service-accounts describe "$(sa deployer)" --project=$PROJECT ||
   gcloud iam service-accounts create deployer --project=$PROJECT --display-name="DuraLedger CI deployer"
