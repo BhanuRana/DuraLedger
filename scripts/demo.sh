@@ -4,6 +4,10 @@
 #   (cd notification-service && ./mvnw spring-boot:run)  # :8081
 #   ./scripts/demo.sh
 #
+# Against Cloud Run (the API key is in Secret Manager; steps 11-12 then use Cloud Scheduler):
+#   LEDGER=<ledger URL> NOTIFY=<notification URL> \
+#   API_KEY=$(gcloud secrets versions access latest --secret=api-key --project=duraledger-bhanu) ./scripts/demo.sh
+#
 # Needs curl, jq and uuidgen. Shows: the API key check, derived balances, an idempotent retry, key
 # reuse refused, an overdraft refused, a concurrent double-submit executing once, a withdrawal, FX
 # through the pools, the events reaching the second service, and a live reconciliation of the ledger.
@@ -85,9 +89,27 @@ echo "alice USD:"; json "$NOTIFY/accounts/$ALICE/activity" | jq -r '.[] | "  \(.
 echo "alice HKD:"; json "$NOTIFY/accounts/$ALICE_HKD/activity" | jq -r '.[] | "  \(.direction)\t\(.amountMinor) \(.currency)\t\(.type)"'
 echo "bob USD:";   json "$NOTIFY/accounts/$BOB/activity"   | jq -r '.[] | "  \(.direction)\t\(.amountMinor) \(.currency)\t\(.type)"'
 
-step "11. Outbox relay health"
-curl -s "$LEDGER/actuator/prometheus" | grep -E '^duraledger_outbox_(pending|oldest)'
+if curl -sf -o /dev/null "$LEDGER/actuator/prometheus"; then   # local: the actuator is open
+  step "11. Outbox relay health"
+  curl -s "$LEDGER/actuator/prometheus" | grep -E '^duraledger_outbox_(pending|oldest)'
 
-step "12. Reconciliation: the whole ledger nets to zero per currency, and every stored balance matches its entries"
-curl -s -X POST "$LEDGER/actuator/reconciliation" | jq -c '{entriesChecked, currencyImbalances, balanceMismatches, duration}'
-curl -s "$LEDGER/actuator/prometheus" | grep -E '^duraledger_reconciliation_violations'
+  step "12. Reconciliation: the whole ledger nets to zero per currency, and every stored balance matches its entries"
+  curl -s -X POST "$LEDGER/actuator/reconciliation" | jq -c '{entriesChecked, currencyImbalances, balanceMismatches, duration}'
+  curl -s "$LEDGER/actuator/prometheus" | grep -E '^duraledger_reconciliation_violations'
+else                                                             # Cloud Run: actuator closed, tasks OIDC-protected
+  step "11. Cloud Run: the task endpoint refuses anonymous callers"
+  curl -s -o /dev/null -w "POST /internal/tasks/reconcile without a token -> HTTP %{http_code}\n" -X POST "$LEDGER/internal/tasks/reconcile"
+
+  step "12. Reconciliation, run by Cloud Scheduler with a Google-signed token"
+  PROJECT=${PROJECT:-duraledger-bhanu}; REGION=${REGION:-asia-southeast1}
+  SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  gcloud scheduler jobs run reconcile --location="$REGION" --project="$PROJECT" --quiet
+  LINE=""
+  for _ in $(seq 20); do
+    LINE=$(gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=ledger-service AND textPayload:\"econciliation\" AND timestamp>=\"$SINCE\"" \
+      --project="$PROJECT" --limit=1 --format='value(textPayload)' 2>/dev/null | sed -E 's/^.*(Reconciliation|RECONCILIATION)/\1/')
+    [ -n "$LINE" ] && break
+    sleep 3
+  done
+  echo "ledger-service log: ${LINE:-<not visible yet; check Cloud Logging>}"
+fi
